@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "g2-policy-protocol"
+version = "0.4.1"
+description = "G2 policy wire contracts for LeRobot and OpenPI"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["numpy>=1.24", "msgpack>=1.0"]
+
+[dependency-groups]
+dev = ["pytest>=7", "jsonschema>=4"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.setuptools.package-data]
+g2_policy_protocol = ["g2.schema.json"]
