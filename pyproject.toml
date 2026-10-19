@@ -10,6 +10,13 @@ readme = "README.md"
 requires-python = ">=3.10"
 dependencies = ["numpy>=1.24", "msgpack>=1.0"]
 
+[project.optional-dependencies]
+tools = ["websockets>=12", "Pillow>=9"]
+
+[project.scripts]
+g2-policy-check = "g2_policy_protocol.check_server:main"
+g2-policy-sample = "g2_policy_protocol.samples:main"
+
 [dependency-groups]
 dev = ["pytest>=7", "jsonschema>=4"]
 
