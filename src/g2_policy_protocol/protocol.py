@@ -1,33 +1,16 @@
-"""Framework-independent G2 messages. Structure/constants come from g2.schema.json.
+"""Framework-independent G2 messages. Structure/constants come from the schemas.
 
-Decode with codec before parsing. Metadata is checked once on connection; per
-request checks cover finite arrays, dynamic image requirements and RTC semantics.
+Decode with codec before parsing. Handshake metadata is checked once; each request
+then uses that metadata to pick v2 pose20 or v3 action_spec / observation_spec.
 """
 from collections.abc import Mapping
 
 import numpy as np
 
-from ._generated import *  # Generated public contract constants.
+from ._generated import *  # Generated public v2 contract constants.
+from ._validation import finite_action_rows, finite_vector
 from .codec import validate_image
 from . import v3
-
-
-def _vector(value, dim, name):
-    if value is None:
-        raise ValueError(f'{name} is required')
-    arr = np.asarray(value, dtype=np.float32)
-    if arr.shape != (dim,) or not np.isfinite(arr).all():
-        raise ValueError(f'{name} must be finite ({dim},), got {arr.shape}')
-    return np.ascontiguousarray(arr)
-
-
-def _actions(value):
-    if value is None:
-        raise ValueError('actions are required')
-    arr = np.asarray(value, dtype=np.float32)
-    if arr.ndim != ACTION_NDIM or len(arr) < ACTION_MIN_ROWS or arr.shape[1] != POSE_DIM or not np.isfinite(arr).all():
-        raise ValueError(f'actions must be finite nonempty (T, {POSE_DIM}), got {arr.shape}')
-    return np.ascontiguousarray(arr)
 
 
 def cameras_for_arm(arm):
@@ -36,6 +19,46 @@ def cameras_for_arm(arm):
     if arm in SIDES:
         return (CAMERA_IDS[0], CAMERA_IDS[SIDES.index(arm) + 1])
     raise ValueError(f'unsupported arm: {arm!r}')
+
+
+def is_v3(metadata):
+    return isinstance(metadata, Mapping) and metadata.get('protocol') == v3.PROTOCOL
+
+
+def action_contract(metadata=None):
+    """Wire control type. v2 and missing metadata are canonical pose20."""
+    return metadata['action_spec'] if is_v3(metadata) else v3.action_spec()
+
+
+def observation_contract(metadata):
+    return metadata['observation_spec'] if is_v3(metadata) else dict(
+        pose=True, joint=metadata.get('requires_joint_state', False), prompt=True,
+        history_steps=1, history_hz=metadata.get('policy_hz', 30), context_keys=[])
+
+
+def parse_actions(value, metadata=None):
+    """Finite nonempty (T, D) actions. D and horizon come from the handshake."""
+    if is_v3(metadata):
+        return v3.actions(value, metadata)
+    return finite_action_rows(value, POSE_DIM)
+
+
+def parse_rtc(payload, metadata):
+    """Shared RTC flags. v3 also bounds delay against horizon and prefix length."""
+    enabled = payload.get('rtc_enabled', False)
+    delay = int(payload.get('inference_delay', 0))
+    raw_prefix = payload.get('prev_chunk_left_over')
+    if enabled and not metadata['rtc_supported']:
+        raise ValueError('server does not support RTC')
+    if not enabled and (delay or raw_prefix is not None):
+        raise ValueError('RTC fields require rtc_enabled=true')
+    prefix = None if raw_prefix is None else parse_actions(raw_prefix, metadata)
+    if is_v3(metadata):
+        if delay >= metadata['action_horizon']:
+            raise ValueError('inference_delay exceeds action horizon')
+        if prefix is not None and delay > len(prefix):
+            raise ValueError('inference_delay exceeds RTC prefix')
+    return enabled, delay, prefix
 
 
 def build_metadata(*, policy_hz, action_horizon=50, arm='both',
@@ -109,21 +132,16 @@ def parse_request(payload, *, metadata):
     prompt = payload['prompt']
     if not prompt.strip():
         raise ValueError('prompt must be nonempty text')
-    result['state'] = _vector(payload['state'], POSE_DIM, 'state')
+    result['state'] = finite_vector(payload['state'], POSE_DIM, 'state')
     if 'joint_state' in payload:
-        result['joint_state'] = _vector(payload['joint_state'], JOINT_DIM, 'joint_state')
+        result['joint_state'] = finite_vector(payload['joint_state'], JOINT_DIM, 'joint_state')
     elif metadata['requires_joint_state']:
         raise ValueError('server requires joint_state')
     result['images'] = validate_images(payload['images'], metadata=metadata)
-    rtc = payload.get('rtc_enabled', False)
-    if rtc and not metadata['rtc_supported']:
-        raise ValueError('invalid or unsupported RTC request')
-    result['rtc_enabled'] = rtc
-    result['inference_delay'] = int(payload.get('inference_delay', 0))
-    prefix = payload.get('prev_chunk_left_over')
-    result['prev_chunk_left_over'] = None if prefix is None else _actions(prefix)
-    if not rtc and (result['inference_delay'] or prefix is not None):
-        raise ValueError('RTC fields require rtc_enabled=true')
+    rtc_enabled, inference_delay, prefix = parse_rtc(payload, metadata)
+    result['rtc_enabled'] = rtc_enabled
+    result['inference_delay'] = inference_delay
+    result['prev_chunk_left_over'] = prefix
     if 'observation_time_ns' in payload:
         result['observation_time_ns'] = int(payload['observation_time_ns'])
     return result
@@ -167,6 +185,10 @@ def build_error(*, request_id, message, code='inference_error'):
 
 
 def parse_response(payload, *, request_id, metadata=None):
+    """Parse action/error. Pass handshake metadata so v3 uses action_spec.dim.
+
+    Omitting metadata keeps the v2 pose20 check.
+    """
     if not isinstance(payload, Mapping):
         raise ValueError('response must be an object')
     kind = payload.get('type')
@@ -181,22 +203,7 @@ def parse_response(payload, *, request_id, metadata=None):
         raise ValueError('response request_id does not match observation')
     if kind == ERROR_TYPE:
         raise RuntimeError(f'policy server {payload["code"]}: {payload["message"]}')
-    return v3.actions(payload['actions'], metadata) if is_v3(metadata) else _actions(payload['actions'])
-
-
-def is_v3(metadata):
-    return isinstance(metadata, Mapping) and metadata.get('protocol') == v3.PROTOCOL
-
-
-def action_contract(metadata):
-    """Resolve the wire control type, including legacy v2 pose servers."""
-    return metadata['action_spec'] if is_v3(metadata) else v3.action_spec()
-
-
-def observation_contract(metadata):
-    return metadata['observation_spec'] if is_v3(metadata) else dict(
-        pose=True, joint=metadata.get('requires_joint_state', False), prompt=True,
-        history_steps=1, history_hz=metadata.get('policy_hz', 30), context_keys=[])
+    return parse_actions(payload['actions'], metadata)
 
 
 def build_reset(*, request_id, metadata):
@@ -209,3 +216,4 @@ def parse_reset_ack(payload, *, request_id):
     v3.fields.validate_reset_ack_fields(payload)
     if payload['request_id'] != request_id:
         raise ValueError('reset acknowledgement request_id mismatch')
+    return dict(payload)

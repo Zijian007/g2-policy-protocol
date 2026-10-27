@@ -1,9 +1,10 @@
-"""Model-neutral v3 capabilities and dynamic arrays; v2 stays backward compatible."""
+"""v3 capabilities, context, and reset. v2 pose20 stays in protocol.py."""
 
 import numpy as np
 
 from . import _generated_v3 as fields
 from . import _validation as check
+from ._validation import finite_action_rows, finite_vector
 
 PROTOCOL = "g2.policy.v3"
 
@@ -53,18 +54,13 @@ def validate_metadata(meta):
 
 
 def actions(value, metadata):
-    dim = metadata["action_spec"]["dim"]
-    arr = np.asarray(value, dtype=np.float32)
-    if arr.ndim != 2 or not len(arr) or arr.shape[1] != dim or not np.isfinite(arr).all():
-        raise ValueError(f"actions must be finite nonempty (T, {dim}), got {arr.shape}")
+    arr = finite_action_rows(value, metadata["action_spec"]["dim"])
     if len(arr) > metadata["action_horizon"]:
         raise ValueError("actions exceeds action_horizon")
-    return np.ascontiguousarray(arr)
+    return arr
 
 
 def context(payload, metadata):
-    from .protocol import _vector
-
     spec = metadata["observation_spec"]
     value = payload.get("context", {})
     allowed = (
@@ -112,13 +108,12 @@ def context(payload, metadata):
                 raise ValueError(f"{name} must be finite (L, {width})")
             result[name] = arr
         else:
-            result[name] = _vector(item, 16 if name in ("object_joint", "start_joint") else 20, name)
+            result[name] = finite_vector(item, 16 if name in ("object_joint", "start_joint") else 20, name)
     return result
 
 
 def parse_request(payload, metadata):
-    from .protocol import _vector
-    from .protocol import validate_images
+    from .protocol import parse_rtc, validate_images
 
     fields.validate_obs_fields(payload)
     spec = metadata["observation_spec"]
@@ -132,24 +127,13 @@ def parse_request(payload, metadata):
         ("joint_state", spec["joint"], 16),
     ]:
         if required or key in payload:
-            result[key] = _vector(payload.get(key), width, key)
+            result[key] = finite_vector(payload.get(key), width, key)
     result["images"] = validate_images(payload["images"], metadata=metadata)
     result["context"] = context(payload, metadata)
     if spec["history_steps"] > 1 and "observation_time_ns" not in payload:
         raise ValueError("history requires observation_time_ns for the latest sample")
-    rtc = payload.get("rtc_enabled", False)
-    delay = payload.get("inference_delay", 0)
-    prefix = payload.get("prev_chunk_left_over")
-    if rtc and not metadata["rtc_supported"]:
-        raise ValueError("server does not support RTC")
-    if not rtc and (delay or prefix is not None):
-        raise ValueError("RTC fields require rtc_enabled=true")
-    if delay >= metadata["action_horizon"]:
-        raise ValueError("inference_delay exceeds action horizon")
-    prefix = None if prefix is None else actions(prefix, metadata)
-    if prefix is not None and delay > len(prefix):
-        raise ValueError("inference_delay exceeds RTC prefix")
-    result.update(rtc_enabled=rtc, inference_delay=delay, prev_chunk_left_over=prefix)
+    rtc_enabled, inference_delay, prefix = parse_rtc(payload, metadata)
+    result.update(rtc_enabled=rtc_enabled, inference_delay=inference_delay, prev_chunk_left_over=prefix)
     return result
 
 

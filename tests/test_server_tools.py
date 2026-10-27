@@ -142,5 +142,5 @@ def test_policy_instance_request_response(encoding, fails):
     if fails:
         assert response["type"] == "error" and response["code"] == "inference_error"
     else:
-        actions = p.parse_response(response, request_id=42)
+        actions = p.parse_response(response, request_id=42, metadata=meta)
         np.testing.assert_array_equal(actions, np.repeat(sample["state"][None], 2, axis=0))

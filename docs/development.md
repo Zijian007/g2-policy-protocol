@@ -1,6 +1,6 @@
 # 开发与发布
 
-[返回 README](../README.md) · [协议参考](protocol.md)
+[返回 README](../README.md) · [v2 协议](protocol.md) · [v3 协议](protocol-v3.md)
 
 本页面向修改共享契约的维护人员。仅部署或接入时，请阅读[域控 / Client](client.md) 或 [GPU Server](server.md)。
 
@@ -8,14 +8,17 @@
 
 ```text
 src/g2_policy_protocol/
-  g2.schema.json   JSON Schema 唯一结构定义（消息、字段、布局、图像、能力）
-  _generated.py    由 Schema 生成的常量与静态校验，禁止手改
-  _validation.py  生成代码复用的轻量类型/范围检查
-  protocol.py     消息构造、解析及动态语义校验
-  codec.py        JSON / MessagePack；NumPy / Base64
+  g2.schema.json     v2 JSON Schema（消息、字段、pose20 布局、图像、能力）
+  g2.v3.schema.json  v3 JSON Schema（action_spec、observation_spec、timing、reset）
+  _generated.py      由 v2 Schema 生成的常量与静态校验，禁止手改
+  _generated_v3.py   由 v3 Schema 生成，禁止手改
+  _validation.py     生成代码复用的轻量类型/范围检查
+  protocol.py        消息构造、解析及按握手版本分流的动态校验
+  v3.py              v3 控制量布局、观测 context、reset
+  codec.py           JSON / MessagePack；NumPy / Base64
 ```
 
-[`g2.schema.json`](../src/g2_policy_protocol/g2.schema.json) 按阅读顺序组织：先看 `metadata / obs / action / error` 四类消息，再看 pose、joint、actions 和 image 的数据表示；末尾是共用的尺寸、计时、请求 ID 和数值类型。`x-g2` 中列出向量字段顺序和单位。
+v2 结构源是 [`g2.schema.json`](../src/g2_policy_protocol/g2.schema.json)，v3 是 [`g2.v3.schema.json`](../src/g2_policy_protocol/g2.v3.schema.json)。两份 Schema 都按阅读顺序组织：先看消息类型，再看向量和图像表示。v2 的 `x-g2` 列出 pose20 字段顺序和单位；v3 的布局在 `action_spec` 中声明。`tools/generate_protocol.py` 同时生成并检查两套静态校验。
 
 JSON Schema 校验只用于开发测试；运行时不读取 Schema 文件，不逐帧执行完整 Schema 验证。
 
@@ -51,7 +54,7 @@ PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest
 python -m pip wheel --no-index --no-deps --no-build-isolation . -w dist
 ```
 
-当前发布包为 `g2_policy_protocol-0.4.1-py3-none-any.whl`。发布新版本时同步更新版本声明、调用方依赖和相关文档；涉及不兼容契约变更时，明确通信协议的兼容边界。
+当前发布包为 `g2_policy_protocol-0.5.0-py3-none-any.whl`。发布新版本时同步更新版本声明、调用方依赖和相关文档；涉及不兼容契约变更时，明确通信协议的兼容边界。0.5.0 增加 `g2.policy.v3`，仍接受 `g2.policy.v2`；0.4.1 client 不能连接 v3 server。
 
 部署时：
 
@@ -72,4 +75,4 @@ python -m pip wheel --no-index --no-deps --no-build-isolation . -w dist
 python tools/build_handoff.py
 ```
 
-产物 `dist/g2-policy-protocol-handoff.zip` 包含源码、文档、示例、生成工具和测试；不包含 `.git`、构建缓存、模型权重或观测录制。接收者解压后可以独立安装、开发并验收，无需 wholebody、G2_pi 或 OpenPI 仓库。版本要求仍与域控一致；本次增加工具不改变 `g2.policy.v2` 格式。
+产物 `dist/g2-policy-protocol-handoff.zip` 包含源码、文档、示例、生成工具和测试；不包含 `.git`、构建缓存、模型权重或观测录制。接收者解压后可以独立安装、开发并验收，无需 wholebody、G2_pi 或 OpenPI 仓库。版本要求仍与域控一致；0.5.0 同时交付 v2 与 v3 契约。

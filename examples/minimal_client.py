@@ -30,7 +30,7 @@ def main():
             )
             ws.send(codec.dumps(request, encoding=args.encoding))
             response = codec.loads(ws.recv(timeout=10), encoding=args.encoding)
-            actions = p.parse_response(response, request_id=request_id)
+            actions = p.parse_response(response, request_id=request_id, metadata=metadata)
             np.testing.assert_array_equal(
                 actions, np.repeat(state[None, :], metadata["action_horizon"], axis=0),
             )

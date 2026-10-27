@@ -10,7 +10,7 @@
 | 模型适配 | 各 policy 实现 canonical request → 模型观测 → canonical actions；OpenPI 用 `OpenPIBackend`，训练转换也使用同一个 `ActionCodec` |
 | 机器人执行 | wholebody 的观测采集、时间队列、插值、安全门、HAL；按 `control_quantity` 选择绑定的 executor |
 
-两个 Python 命名空间暂由同一个 `g2-policy-protocol==0.5.0` 轻量发行包提供，便于三个仓库同步升级。基础依赖是 numpy/msgpack；几何旋转使用可选 `geometry` extra 的 SciPy，WebSocket server 使用 `tools` extra。导入协议不加载模型或机器人运行时。原 `openpi.adapters.g2` 与 `wholebody.shared.g2_lerobot_contract` 的导入路径保留兼容转发。
+两个 Python 命名空间暂由同一个 `g2-policy-protocol==0.5.0` 轻量发行包提供，便于三个仓库同步升级。域控与 GPU 必须同装这一版本：v3 server 发给 0.4.1 client 会在握手时被拒。基础依赖是 numpy/msgpack；几何旋转使用可选 `geometry` extra 的 SciPy，WebSocket server 使用 `tools` extra。导入协议不加载模型或机器人运行时。原 `openpi.adapters.g2` 与 `wholebody.shared.g2_lerobot_contract` 的导入路径保留兼容转发。
 
 模型内部可以预测 delta、SE(3)、不同旋转表示、单臂或补齐维度；适配器必须还原到声明的完整双臂绝对控制量。协议不会传输 Pi05 token 设置、归一化参数、LoRA 或 padded action_dim=32。
 

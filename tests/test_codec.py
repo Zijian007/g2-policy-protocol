@@ -137,8 +137,8 @@ def test_json_and_msgpack_feed_the_same_protocol_parser(encoding):
     np.testing.assert_array_equal(first['state'], second['state'])
     np.testing.assert_array_equal(first['prev_chunk_left_over'], second['prev_chunk_left_over'])
     response = wire.build_response(request_id=42, actions=np.ones((2, 20)))
-    np.testing.assert_array_equal(wire.parse_response(codec.json_loads(codec.json_dumps(response)), request_id=42),
-                                  wire.parse_response(codec.unpackb(codec.packb(response)), request_id=42))
+    np.testing.assert_array_equal(wire.parse_response(codec.json_loads(codec.json_dumps(response)), request_id=42, metadata=meta),
+                                  wire.parse_response(codec.unpackb(codec.packb(response)), request_id=42, metadata=meta))
 
 
 def test_json_rejects_extended_float_without_recursing():

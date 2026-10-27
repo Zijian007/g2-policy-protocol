@@ -49,10 +49,10 @@ def test_every_message_agrees_with_json_schema(encoding, image_encoding):
         elif message['type'] == 'obs':
             p.parse_request(decoded, metadata=meta)
         elif message['type'] == 'action':
-            p.parse_response(decoded, request_id=42)
+            p.parse_response(decoded, request_id=42, metadata=meta)
         else:
             with pytest.raises(RuntimeError, match='model failed'):
-                p.parse_response(decoded, request_id=42)
+                p.parse_response(decoded, request_id=42, metadata=meta)
 
 
 @pytest.mark.parametrize('changes', [{'protocol': 'g2.policy.v1'}, {'policy_hz': 0}, {'policy_hz': float('nan')},

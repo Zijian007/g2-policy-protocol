@@ -5,6 +5,24 @@ import math
 import numpy as np
 
 
+def finite_vector(value, dim, name):
+    if value is None:
+        raise ValueError(f'{name} is required')
+    arr = np.asarray(value, dtype=np.float32)
+    if arr.shape != (dim,) or not np.isfinite(arr).all():
+        raise ValueError(f'{name} must be finite ({dim},), got {arr.shape}')
+    return np.ascontiguousarray(arr)
+
+
+def finite_action_rows(value, dim, name='actions'):
+    if value is None:
+        raise ValueError(f'{name} are required')
+    arr = np.asarray(value, dtype=np.float32)
+    if arr.ndim != 2 or not len(arr) or arr.shape[1] != dim or not np.isfinite(arr).all():
+        raise ValueError(f'{name} must be finite nonempty (T, {dim}), got {arr.shape}')
+    return np.ascontiguousarray(arr)
+
+
 def integer(value, name, minimum):
     if isinstance(value, (bool, np.bool_)) or not isinstance(value, (int, np.integer)) or value < minimum:
         raise ValueError(f'{name} must be an integer >= {minimum}')

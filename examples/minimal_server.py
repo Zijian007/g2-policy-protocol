@@ -48,7 +48,9 @@ def handle_connection(websocket, *, metadata, policy):
                 observation = p.parse_request(payload, metadata=metadata)
                 error_code = "inference_error"
                 result = policy.infer(observation)
-                response = p.build_response(request_id=request_id, actions=result["actions"])
+                response = p.build_response(
+                    request_id=request_id, actions=result["actions"], metadata=metadata,
+                )
             except Exception as exc:
                 logger.exception("Request failed")
                 response = p.build_error(

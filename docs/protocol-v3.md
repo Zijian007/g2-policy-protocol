@@ -1,6 +1,6 @@
 # g2.policy.v3
 
-v3 为不同模型声明相同的 G2 观测和控制契约。v2 pose20 API 仍保留，新客户端按握手版本选择校验。私有 `g2.openpi.v1` 已移除。升级 v3 服务时需同步升级客户端到 `g2-policy-protocol==0.5.0`。
+v3 为不同模型声明相同的 G2 观测和控制契约。v2 pose20 API 仍保留，client 按握手 `protocol` 选择校验。私有 `g2.openpi.v1` 已移除。升级 v3 服务时必须同步升级客户端到 `g2-policy-protocol==0.5.0`：0.4.1 会把 `action_spec`、`observation_spec`、`reset_supported`、`timing` 判为 unknown 并断开。当前 OpenPI G2 server 发送 `g2.policy.v3`。
 
 基础握手保留 action_horizon、policy_hz、arm、required_cameras、图像传输设置、rtc_supported、requires_joint_state。新增：
 

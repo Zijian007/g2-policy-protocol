@@ -1,10 +1,10 @@
 # For GPU Server
 
-[返回 README](../README.md) · [域控 / Client](client.md) · [协议参考](protocol.md)
+[返回 README](../README.md) · [域控 / Client](client.md) · [v2 协议](protocol.md) · [v3 协议](protocol-v3.md)
 
 本文面向开发和部署 policy server 的人员。只需本仓库和模型运行环境，即使无法访问或修改域控，也可以独立完成服务实现和协议验收。
 
-server 负责声明模型能力、接收统一观测、适配模型输入，并将推理结果转换为绝对 pose20 动作返回。
+server 负责声明模型能力、接收统一观测、适配模型输入，并将推理结果转换为握手声明的绝对控制量返回。v2 固定 pose20；v3 使用 `action_spec`。当前 OpenPI G2 server 发送 `g2.policy.v3`。
 
 阅读顺序：[安装](#安装) → [启动最小服务](#可直接启动的最小-websocket-server) → [配置能力](#metadata-参数从哪里来) → [适配模型](#模型适配示例) → [独立验收](#独立验收) → [交付](#模型状态与交付)。
 
@@ -21,7 +21,7 @@ python -m pip install -e '.[tools]'
 只有 wheel 时，可安装协议包和验收工具：
 
 ```bash
-python -m pip install '/path/to/g2_policy_protocol-0.4.1-py3-none-any.whl[tools]'
+python -m pip install '/path/to/g2_policy_protocol-0.5.0-py3-none-any.whl[tools]'
 ```
 
 wheel 不包含 examples 和 Markdown 文档；需要完整示例时使用源码交付包。安装或升级后先重启 GPU server，再启动域控 client。
@@ -79,7 +79,7 @@ g2-policy-check --url ws://127.0.0.1:8000 --report report.json
 - 请求无效时返回 `invalid_request`，模型或动作构造失败时返回 `inference_error`；无法取得有效请求 ID 时回退为 `0`。
 - 处理客户端断连，使用 Ctrl+C 停止服务。
 
-示例声明双臂、头部相机、224×224 raw RGB、无 RTC、无需 joint_state。调整能力时修改 `main()` 中的 `build_metadata(...)`，并同步更新实际处理逻辑。接入真实模型时实现 `policy.infer(observation)`，完成模型输入转换、推理以及绝对 pose20 输出转换；需要 JPEG 时再补充解码和解码后的尺寸检查。
+仓库自带的 `minimal_server.py` 仍发 v2 metadata，便于对照旧握手。新模型服务应使用 `build_metadata(version=3, ...)`，见下方 [v2 与 v3](#v2-与-v3)。示例声明双臂、头部相机、224×224 raw RGB、无 RTC、无需 joint_state。调整能力时修改 `main()` 中的 `build_metadata(...)`，并同步更新实际处理逻辑。接入真实模型时实现 `policy.infer(observation)`，完成模型输入转换、推理以及握手声明的绝对控制量输出；需要 JPEG 时再补充解码和解码后的尺寸检查。
 
 ## 服务端接入流程
 
@@ -87,10 +87,10 @@ g2-policy-check --url ws://127.0.0.1:8000 --report report.json
 2. 接受连接，根据连接参数确定编码，首先发送 `metadata`。
 3. 解码收到的 frame，调用 `parse_request` 检查观测和能力匹配。
 4. 按需解码 JPEG，再检查图像实际尺寸，将观测适配成模型输入。
-5. 执行推理，将模型输出转换为 `base_link` 下的绝对 `(T,20)` 动作。
-6. 构造 `action`，原样回传请求 ID；处理请求失败时返回 `error`。
+5. 执行推理，将模型输出转换为握手声明的绝对控制量（v2 为 `base_link` 下 `(T,20)` pose；v3 为 `(T, action_spec.dim)`）。
+6. 构造 `action`，原样回传请求 ID；`build_response` 传入同一份 metadata。处理请求失败时返回 `error`。v3 且 `reset_supported` 时还应处理 `reset` → `reset_ack`。
 
-metadata 应声明实际的策略频率、动作 horizon、执行臂、必需相机、图像编码/尺寸/resize 方式、RTC 支持和关节状态需求。ACT 的 `execution_steps` 可以小于 `action_horizon`，以保留 temporal ensemble 的单步执行行为。模型名称等诊断信息可放入 `extensions`，不参与客户端执行判断。
+metadata 应声明实际的策略频率、动作 horizon、执行臂、必需相机、图像编码/尺寸/resize 方式、RTC 支持和关节状态需求。v3 还要声明 `action_spec`、`observation_spec`、`timing` 和 `reset_supported`。ACT 的 `execution_steps` 可以小于 `action_horizon`，以保留 temporal ensemble 的单步执行行为。模型名称等诊断信息可放入 `extensions`，不参与客户端执行判断。
 
 ## metadata 参数从哪里来
 
@@ -99,8 +99,8 @@ metadata 应声明实际的策略频率、动作 horizon、执行臂、必需相
 | `policy_hz` | 无，必须传入 | 数据/训练的动作频率；不是 GPU 每秒推理次数，与域控约定匹配 |
 | `action_horizon` | 50 | 模型一次预测的步数，与实际模型配置一致 |
 | `execution_steps` | 不设置 | 此时 client 按 horizon 规划；需要较短执行前缀时显式声明，范围 1..horizon |
-| `arm` | both | 模型的执行臂；单臂也返回完整 pose20 |
-| `required_cameras` | 双臂三相机；单臂头部加同侧腕部 | 按模型真实输入声明，至少一个；不要照抄示例只声明头部 |
+| `arm` | both | 模型的执行臂；v2 单臂也返回完整 pose20；v3 返回完整 `action_spec.dim`，未选侧保持实测或置零 |
+| `required_cameras` | 双臂三相机；单臂头部加同侧腕部 | 按模型真实输入声明。v2 至少一个；v3 允许空列表或只选腕部。不要照抄示例只声明头部 |
 | `image_encoding` | raw | 部署传输方式；声明 jpeg 时必须实现解码 |
 | `image_sizes` | 空字典 | 按相机声明输入 `[H,W]`；缺少某相机尺寸时 client 保留原尺寸 |
 | `image_resize` | resize | 与训练预处理约定匹配，可选 letterbox；避免 server 再次重复缩放 |
@@ -108,13 +108,36 @@ metadata 应声明实际的策略频率、动作 horizon、执行臂、必需相
 | `rtc_supported` | False | 仅在实际模型和服务实现支持 prefix/delay 时设 True |
 | `extensions` | 不设置 | 诊断信息；不能依赖它改变域控执行行为 |
 
-`p.build_metadata()` 只构造和校验声明。部署参数、实际预处理和推理逻辑必须使用一致的配置。
+`p.build_metadata()` 只构造和校验声明。默认 `version=2`。v3 额外字段用 `version=3` 填入，或显式传入 `action_spec` / `observation_spec` / `timing` / `reset_supported`。部署参数、实际预处理和推理逻辑必须使用一致的配置。
 
 例如 30 Hz、horizon=50：相邻动作相隔约 33.3 ms，50 步覆盖约 1.67 秒的动作时段，首末动作的采样时间差为 49/30 秒。不是每次 GPU 推理必须耗时 33.3 ms。`execution_steps=1` 表示按较短执行前缀规划，不代表把模型 horizon 改成 1；服务端是否截断输出、进行 temporal ensemble，也必须在模型适配中明确。域控的实际发起推理时机还受补充策略和延迟影响。
 
+## v2 与 v3
+
+新模型服务使用 v3：
+
+```python
+metadata = p.build_metadata(
+    version=3,
+    policy_hz=30,
+    action_horizon=50,
+    arm="right",
+    required_cameras=["head_color", "hand_right_color"],
+    image_encoding="jpeg",
+    image_sizes={"head_color": [224, 224], "hand_right_color": [224, 224]},
+    image_resize="letterbox",
+    rtc_supported=True,
+    requires_joint_state=False,
+)
+```
+
+未传入的 `action_spec` 默认为 `pose_target`（20 维绝对位姿）。其他控制量用 `protocol.v3.action_spec("joint_position")` 等构造，校验拒绝错配的维度、字段、单位和坐标系。完整字段见 [v3 协议](protocol-v3.md)。
+
+`build_response` / `parse_response` / `parse_request` 都必须传入同一份 metadata。声明 `reset_supported=True` 时 backend 必须实现 `reset()`；`g2_policy_protocol.server.PolicyServer` 会在握手后处理 `reset` 消息。0.4.1 域控不能连接 v3 server。
+
 ## 自定义 server 时使用的 API
 
-以下函数只展示协议与模型的边界。WebSocket 监听、连接参数解析、收发 frame 和模型加载由服务项目实现。示例使用 raw RGB 图像；`policy` 是调用方提供的模型实例，`infer()` 返回包含绝对 pose20 动作的字典，与最小 server 的接口一致。
+以下函数只展示协议与模型的边界。WebSocket 监听、连接参数解析、收发 frame 和模型加载由服务项目实现。示例使用 raw RGB 图像和默认 v2 metadata；`policy` 是调用方提供的模型实例，`infer()` 返回包含绝对控制量动作的字典，与最小 server 的接口一致。v3 把 `version=3` 传给 `build_metadata`，并在 `build_response` 中传入 metadata。
 
 ```python
 from g2_policy_protocol import codec, protocol as p
@@ -143,6 +166,7 @@ def infer_frame(frame, policy, *, encoding="msgpack"):
         result = policy.infer(observation)
         response = p.build_response(
             request_id=observation["request_id"], actions=result["actions"],
+            metadata=metadata,
         )
     except Exception as exc:
         response = p.build_error(
@@ -166,7 +190,7 @@ python examples/model_adapter.py
 - `expand_single_arm()`：将 `(T,10)` 放入对应手臂，另一臂保持输入实测位姿，返回 `(T,20)`；metadata.arm 仍需声明相应执行臂。
 - `additive_pose_delta_to_absolute()`：仅适用于“每帧 xyz 和 rot6d 分量都相对同一实测 pose 做差、夹爪保持绝对值”的模型。不是通用刚体变换；轴角增量、局部坐标增量、逐步累积增量均不能直接套用。旋转矩阵增量需按训练约定明确左乘/右乘，不应直接相加。
 
-在输出之前完成反归一化、去除模型填充维度、单位及坐标转换。关节动作模型需要在 server 内解决到末端 pose20 的转换；仅声明 requires_joint_state 不会让 client 接受关节动作输出。模型不使用另一臂，也不能把它的旋转填零。
+在输出之前完成反归一化、去除模型填充维度、单位及坐标转换。v2 关节动作模型必须在 server 内转换到末端 pose20，client 不接受关节动作输出。v3 可声明 `control_quantity=joint_position`，由域控按已绑定的关节执行器处理；未绑定的控制量会在打开硬件前被拒绝。仅声明 `requires_joint_state` 不会改变动作空间。模型不使用另一臂，也不能把它的旋转填零。
 
 ## JPEG 可运行示例
 
@@ -186,7 +210,7 @@ g2-policy-check --report jpeg-report.json
 
 ## 独立验收
 
-工具根据 metadata 选择相机、缩放尺寸、raw/JPEG 编码和可选 joint_state，检查 metadata、响应类型、请求 ID、非空 `(T,20)` 动作及有限值。额外检查夹爪在 `[0,1]` 内、rot6d 两列非退化；这些是工具附加诊断，不是核心解析器的新规则。`--protocol-only` 可跳过附加诊断。返回 T 与 `action_horizon` 不同时记录警告，需结合 `execution_steps` 和实际调度确认。
+工具根据 metadata 选择相机、缩放尺寸、raw/JPEG 编码和可选 joint_state，检查 metadata、响应类型、请求 ID、非空 `(T, D)` 动作及有限值（v2 的 D=20，v3 的 D=`action_spec.dim`）。额外检查夹爪在 `[0,1]` 内、rot6d 两列非退化；这些是工具附加诊断，不是核心解析器的新规则。`--protocol-only` 可跳过附加诊断。返回 T 与 `action_horizon` 不同时记录警告，需结合 `execution_steps` 和实际调度确认。
 
 默认使用明确标注为 synthetic 的合成观测。全套通过只代表该输入下的协议接入成功，不能证明模型质量、坐标系正确、动作可达、真实图像预处理一致或推理能满足机器人运行时限。报告中的 `round_trip_ms` 包含通信与处理时间，不等于 GPU 推理时间。
 
@@ -248,7 +272,7 @@ save_sample("observation.npz", {
 
 ## 模型状态与交付
 
-无状态模型可以共享权重；temporal ensemble、历史图像、RTC 缓存等应按连接隔离，连接建立时初始化、断开时清理。示例在监听前创建一个共享的无状态 MockPolicy 实例；若替换为带可变缓存的 policy，需要为每条连接单独创建会话实例（权重可共享），避免并发请求修改同一缓存。v2 没有单独的 reset/任务结束消息；任务切换或重连是否表示新 episode 必须与域控集成人员约定，不能只靠 request_id 自行推断。通用工具的两种编码使用两个连接，因此可能触发两次初始化；显式的模型 reset 语义不在验收范围内。
+无状态模型可以共享权重；temporal ensemble、历史图像、RTC 缓存等应按连接隔离，连接建立时初始化、断开时清理。示例在监听前创建一个共享的无状态 MockPolicy 实例；若替换为带可变缓存的 policy，需要为每条连接单独创建会话实例（权重可共享），避免并发请求修改同一缓存。v2 没有单独的 reset 消息，任务切换或重连是否表示新 episode 必须与域控约定，不能只靠 request_id 自行推断。v3 可声明 `reset_supported`：client 发 `reset`，server 清理该会话后回 `reset_ack`；reset 与机器人归位命令无关。通用工具的两种编码使用两个连接，因此可能触发两次初始化。
 
 交付给集成人员时提供 server 启动命令、模型/协议包版本、连接地址、metadata 配置、普通验收报告以及启用 RTC 时的专项报告。附上使用的样本 provenance、已确认的模型坐标与夹爪约定，并说明尚未进行真实机器人运行验证。
 

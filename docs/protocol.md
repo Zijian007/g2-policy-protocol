@@ -1,10 +1,10 @@
-> 本文描述保留兼容的 v2。新功能见 [v3](protocol-v3.md)，两版均由同一个发行包提供。
+> 本文只描述保留兼容的 `g2.policy.v2`。v3 见 [protocol-v3.md](protocol-v3.md)。0.5.0 同一个发行包同时提供两版；client 按握手 `protocol` 分流。
 
-# 协议参考
+# 协议参考（v2）
 
-[返回 README](../README.md) · [域控 / Client](client.md) · [GPU Server](server.md)
+[返回 README](../README.md) · [域控 / Client](client.md) · [GPU Server](server.md) · [v3](protocol-v3.md)
 
-两端共用 `g2.policy.v2`。唯一结构定义是 [`g2.schema.json`](../src/g2_policy_protocol/g2.schema.json)，其中 `x-g2` 记录向量字段顺序、单位和固定语义。
+`g2.policy.v2` 的结构定义是 [`g2.schema.json`](../src/g2_policy_protocol/g2.schema.json)，其中 `x-g2` 记录向量字段顺序、单位和固定语义。当前 OpenPI G2 server 已改发 `g2.policy.v3`，不要把本文当成线上唯一握手。
 
 ## 连接与消息
 
@@ -99,6 +99,7 @@ for encoding in ("msgpack", "json"):
     actions = p.parse_response(
         codec.loads(codec.dumps(response, encoding=encoding), encoding=encoding),
         request_id=42,
+        metadata=client_metadata,
     )
     assert actions.shape == (2, 20)
     np.testing.assert_array_equal(actions[0], state)
@@ -109,6 +110,6 @@ Schema 描述静态结构，Python 校验动态 shape、有限值、相机/RTC �
 
 ## 版本边界
 
-包版本 `0.4.1` 保持 `g2.policy.v2` 通信格式。v2 删除握手中的 `schema_version / state_layout / action_layout / frame / rotation / action_semantics / encoding / policy_type`，不兼容 `g2.policy.v1` 和更早的两套 G2 消息。
+包版本 `0.5.0` 同时提供 `g2.policy.v2` 和 `g2.policy.v3`。v2 删除握手中的 `schema_version / state_layout / action_layout / frame / rotation / action_semantics / encoding / policy_type`，不兼容 `g2.policy.v1` 和更早的两套 G2 消息。v3 在握手中新增 `action_spec`、`observation_spec`、`timing`、`reset_supported`；0.4.1 会把这些字段判为 unknown。
 
-域控与 GPU 两端必须同步安装 0.4.1、更新代码并重启。协议升级步骤见[开发与发布](development.md)。
+域控与 GPU 两端必须同步安装 0.5.0、更新代码并重启。v3 服务不能搭配 0.4.1 client。协议升级步骤见[开发与发布](development.md)。
