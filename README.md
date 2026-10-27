@@ -1,5 +1,7 @@
 # g2-policy-protocol
 
+0.5.0 新增模型无关的 [v3 协议](docs/protocol-v3.md) 与 [分层接入说明](docs/architecture.md)。保留 v2 pose20 API。共用几何/数据工具位于 `g2_policy_tools`，训练配置与网络实现仍由各 policy 仓库维护。
+
 框架无关的 G2 policy 通信契约，连接 wholebody 域控与 G2_pi、OpenPI 或第三方模型服务。ACT、LeRobot π₀.₅ 和 OpenPI 共用 `g2.policy.v2`。
 
 ```text
@@ -22,7 +24,7 @@ wholebody（域控 / client）                 G2_pi / OpenPI（GPU / server）
 
 ## 安装与版本要求
 
-**域控和 GPU server 都必须安装同一版本 `g2-policy-protocol==0.4.1`。** 各自环境的安装方式见对应接入文档。跨机部署推荐分发同一个 wheel。
+**域控和 GPU server 都必须安装同一版本 `g2-policy-protocol==0.5.0`。** 各自环境的安装方式见对应接入文档。跨机部署推荐分发同一个 wheel。
 
 - Python ≥3.10，运行依赖只有 NumPy、MessagePack；不依赖机器人库、Torch、JAX、LeRobot、OpenCV 或 WebSocket 库。
 - 当前通信协议为 `g2.policy.v2`，不兼容 `g2.policy.v1` 和更早的两套 G2 消息。

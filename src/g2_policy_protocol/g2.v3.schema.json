@@ -1,0 +1,718 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:g2:policy:v3",
+  "title": "G2 policy protocol v3",
+  "description": "Framework-independent wire contract. JSON and MessagePack restore to the same messages; finite values, image/shape consistency and negotiated capabilities are enforced by protocol.py.",
+  "x-g2": {
+    "pose_fields": [
+      "left_x",
+      "left_y",
+      "left_z",
+      "left_rot6d_0",
+      "left_rot6d_1",
+      "left_rot6d_2",
+      "left_rot6d_3",
+      "left_rot6d_4",
+      "left_rot6d_5",
+      "left_gripper",
+      "right_x",
+      "right_y",
+      "right_z",
+      "right_rot6d_0",
+      "right_rot6d_1",
+      "right_rot6d_2",
+      "right_rot6d_3",
+      "right_rot6d_4",
+      "right_rot6d_5",
+      "right_gripper"
+    ],
+    "joint_fields": [
+      "left_joint_1",
+      "left_joint_2",
+      "left_joint_3",
+      "left_joint_4",
+      "left_joint_5",
+      "left_joint_6",
+      "left_joint_7",
+      "left_gripper",
+      "right_joint_1",
+      "right_joint_2",
+      "right_joint_3",
+      "right_joint_4",
+      "right_joint_5",
+      "right_joint_6",
+      "right_joint_7",
+      "right_gripper"
+    ],
+    "camera_ids": [
+      "head_color",
+      "hand_left_color",
+      "hand_right_color"
+    ],
+    "sides": [
+      "left",
+      "right"
+    ],
+    "position_unit": "m",
+    "joint_unit": "rad",
+    "rot6d_order": "F",
+    "gripper_open": 0.0,
+    "gripper_closed": 1.0,
+    "frame": "base_link",
+    "rotation": "rot6d",
+    "action_semantics": "absolute",
+    "encoding_values": [
+      "msgpack",
+      "json"
+    ],
+    "ee_frame": "flange"
+  },
+  "oneOf": [
+    {
+      "$ref": "#/$defs/metadata"
+    },
+    {
+      "$ref": "#/$defs/obs"
+    },
+    {
+      "$ref": "#/$defs/action"
+    },
+    {
+      "$ref": "#/$defs/error"
+    },
+    {
+      "$ref": "#/$defs/reset"
+    },
+    {
+      "$ref": "#/$defs/reset_ack"
+    }
+  ],
+  "$defs": {
+    "metadata": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "metadata"
+        },
+        "protocol": {
+          "const": "g2.policy.v3"
+        },
+        "policy_hz": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "action_horizon": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "arm": {
+          "enum": [
+            "both",
+            "left",
+            "right"
+          ]
+        },
+        "required_cameras": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "head_color",
+              "hand_left_color",
+              "hand_right_color"
+            ]
+          },
+          "minItems": 0,
+          "maxItems": 3,
+          "uniqueItems": true
+        },
+        "image_encoding": {
+          "enum": [
+            "raw",
+            "jpeg"
+          ]
+        },
+        "image_resize": {
+          "enum": [
+            "resize",
+            "letterbox"
+          ]
+        },
+        "image_sizes": {
+          "type": "object",
+          "properties": {
+            "head_color": {
+              "$ref": "#/$defs/image_size"
+            },
+            "hand_left_color": {
+              "$ref": "#/$defs/image_size"
+            },
+            "hand_right_color": {
+              "$ref": "#/$defs/image_size"
+            }
+          },
+          "additionalProperties": false
+        },
+        "rtc_supported": {
+          "type": "boolean"
+        },
+        "requires_joint_state": {
+          "type": "boolean"
+        },
+        "execution_steps": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "extensions": {
+          "type": "object"
+        },
+        "action_spec": {
+          "type": "object",
+          "properties": {
+            "control_quantity": {
+              "enum": [
+                "pose_target",
+                "joint_position",
+                "joint_velocity",
+                "eef_twist",
+                "joint_torque"
+              ]
+            },
+            "dim": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "fields": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "minItems": 1,
+              "uniqueItems": true
+            },
+            "units": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "minItems": 1
+            },
+            "frame": {
+              "const": "base_link"
+            },
+            "ee_frame": {
+              "const": "flange"
+            },
+            "representation": {
+              "const": "absolute"
+            }
+          },
+          "required": [
+            "control_quantity",
+            "dim",
+            "fields",
+            "units",
+            "frame",
+            "ee_frame",
+            "representation"
+          ],
+          "additionalProperties": false
+        },
+        "observation_spec": {
+          "type": "object",
+          "properties": {
+            "pose": {
+              "type": "boolean"
+            },
+            "joint": {
+              "type": "boolean"
+            },
+            "prompt": {
+              "type": "boolean"
+            },
+            "history_steps": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "history_hz": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "context_keys": {
+              "type": "array",
+              "items": {
+                "enum": [
+                  "command_pose",
+                  "previous_command_pose",
+                  "object_pose",
+                  "object_joint",
+                  "start_pose",
+                  "start_joint",
+                  "base_to_parent",
+                  "pose_history",
+                  "joint_history",
+                  "image_history"
+                ]
+              },
+              "uniqueItems": true
+            }
+          },
+          "required": [
+            "pose",
+            "joint",
+            "prompt",
+            "history_steps",
+            "history_hz",
+            "context_keys"
+          ],
+          "additionalProperties": false
+        },
+        "timing": {
+          "type": "object",
+          "properties": {
+            "action_dt": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "first_target_offset_s": {
+              "type": "number",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "action_dt",
+            "first_target_offset_s"
+          ],
+          "additionalProperties": false
+        },
+        "reset_supported": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "type",
+        "protocol",
+        "policy_hz",
+        "action_horizon",
+        "arm",
+        "required_cameras",
+        "image_encoding",
+        "image_resize",
+        "image_sizes",
+        "rtc_supported",
+        "requires_joint_state",
+        "action_spec",
+        "observation_spec",
+        "timing",
+        "reset_supported"
+      ],
+      "additionalProperties": false
+    },
+    "obs": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "obs"
+        },
+        "request_id": {
+          "$ref": "#/$defs/request_id"
+        },
+        "prompt": {
+          "type": "string",
+          "minLength": 0
+        },
+        "state": {
+          "$ref": "#/$defs/pose"
+        },
+        "joint_state": {
+          "$ref": "#/$defs/joint"
+        },
+        "images": {
+          "type": "object",
+          "properties": {
+            "head_color": {
+              "$ref": "#/$defs/image"
+            },
+            "hand_left_color": {
+              "$ref": "#/$defs/image"
+            },
+            "hand_right_color": {
+              "$ref": "#/$defs/image"
+            }
+          },
+          "additionalProperties": false
+        },
+        "rtc_enabled": {
+          "type": "boolean"
+        },
+        "inference_delay": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "prev_chunk_left_over": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/actions"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "observation_time_ns": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "context": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "type",
+        "request_id",
+        "images"
+      ],
+      "additionalProperties": false
+    },
+    "action": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "action"
+        },
+        "request_id": {
+          "$ref": "#/$defs/request_id"
+        },
+        "actions": {
+          "$ref": "#/$defs/actions"
+        },
+        "server_timing": {
+          "$ref": "#/$defs/timings"
+        },
+        "policy_timing": {
+          "$ref": "#/$defs/timings"
+        },
+        "rtc_info": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "type",
+        "request_id",
+        "actions"
+      ],
+      "additionalProperties": false
+    },
+    "error": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "error"
+        },
+        "request_id": {
+          "$ref": "#/$defs/request_id"
+        },
+        "code": {
+          "type": "string",
+          "minLength": 1
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "type",
+        "request_id",
+        "code",
+        "message"
+      ],
+      "additionalProperties": false
+    },
+    "pose": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/pose_values"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "$g2": {
+              "const": "ndarray"
+            },
+            "dtype": {
+              "$ref": "#/$defs/float_dtype"
+            },
+            "shape": {
+              "const": [
+                20
+              ]
+            },
+            "data": {
+              "$ref": "#/$defs/pose_values"
+            }
+          },
+          "required": [
+            "$g2",
+            "dtype",
+            "shape",
+            "data"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "joint": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/joint_values"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "$g2": {
+              "const": "ndarray"
+            },
+            "dtype": {
+              "$ref": "#/$defs/float_dtype"
+            },
+            "shape": {
+              "const": [
+                16
+              ]
+            },
+            "data": {
+              "$ref": "#/$defs/joint_values"
+            }
+          },
+          "required": [
+            "$g2",
+            "dtype",
+            "shape",
+            "data"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "actions": {
+      "anyOf": [
+        {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            },
+            "minItems": 1
+          },
+          "minItems": 1
+        },
+        {
+          "type": "object",
+          "properties": {
+            "$g2": {
+              "const": "ndarray"
+            },
+            "dtype": {
+              "$ref": "#/$defs/float_dtype"
+            },
+            "shape": {
+              "type": "array",
+              "prefixItems": [
+                {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              ],
+              "items": false,
+              "minItems": 2
+            },
+            "data": {
+              "type": "array",
+              "items": {
+                "type": "array",
+                "items": {
+                  "type": "number"
+                },
+                "minItems": 1
+              },
+              "minItems": 1
+            }
+          },
+          "required": [
+            "$g2",
+            "dtype",
+            "shape",
+            "data"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "image": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "$g2": {
+              "const": "bytes"
+            },
+            "encoding": {
+              "const": "base64"
+            },
+            "data": {
+              "type": "string",
+              "minLength": 1,
+              "contentEncoding": "base64"
+            }
+          },
+          "required": [
+            "$g2",
+            "encoding",
+            "data"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "$g2": {
+              "const": "ndarray"
+            },
+            "dtype": {
+              "const": "|u1"
+            },
+            "shape": {
+              "type": "array",
+              "prefixItems": [
+                {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                {
+                  "const": 3
+                }
+              ],
+              "items": false,
+              "minItems": 3
+            },
+            "data": {
+              "type": "array",
+              "items": {
+                "type": "array",
+                "items": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 255
+                  },
+                  "minItems": 3,
+                  "maxItems": 3
+                },
+                "minItems": 1
+              },
+              "minItems": 1
+            }
+          },
+          "required": [
+            "$g2",
+            "dtype",
+            "shape",
+            "data"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "image_size": {
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "timings": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "number",
+        "minimum": 0
+      }
+    },
+    "request_id": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "float_dtype": {
+      "enum": [
+        "<f4",
+        "<f8",
+        ">f4",
+        ">f8"
+      ]
+    },
+    "pose_values": {
+      "type": "array",
+      "items": {
+        "type": "number"
+      },
+      "minItems": 20,
+      "maxItems": 20
+    },
+    "joint_values": {
+      "type": "array",
+      "items": {
+        "type": "number"
+      },
+      "minItems": 16,
+      "maxItems": 16
+    },
+    "reset": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "reset"
+        },
+        "request_id": {
+          "$ref": "#/$defs/request_id"
+        }
+      },
+      "required": [
+        "type",
+        "request_id"
+      ],
+      "additionalProperties": false
+    },
+    "reset_ack": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "reset_ack"
+        },
+        "request_id": {
+          "$ref": "#/$defs/request_id"
+        }
+      },
+      "required": [
+        "type",
+        "request_id"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

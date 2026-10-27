@@ -10,7 +10,7 @@ server 负责声明模型能力、接收统一观测、适配模型输入，并�
 
 ## 安装
 
-**协议包固定为 `g2-policy-protocol==0.4.1`，与域控保持一致。** 在模型服务的 Python 环境中，进入本仓库根目录安装：
+**协议包固定为 `g2-policy-protocol==0.5.0`，与域控保持一致。** 在模型服务的 Python 环境中，进入本仓库根目录安装：
 
 ```bash
 python -m pip install -e '.[tools]'

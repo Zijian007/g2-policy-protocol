@@ -1,3 +1,5 @@
+> 本文描述保留兼容的 v2。新功能见 [v3](protocol-v3.md)，两版均由同一个发行包提供。
+
 # 协议参考
 
 [返回 README](../README.md) · [域控 / Client](client.md) · [GPU Server](server.md)

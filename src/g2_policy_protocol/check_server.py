@@ -9,7 +9,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 import numpy as np
 
 from . import codec, protocol as p
-from .samples import load_sample, prepare_images, synthetic_sample
+from .samples import load_sample, prepare_images, synthetic_sample, synthetic_context
 
 
 def connection_uri(uri, encoding):
@@ -43,14 +43,16 @@ def check_connection(uri, encoding, sample, *, requests=2, timeout=30,
                     joint_state=sample.get("joint_state") if metadata["requires_joint_state"] else None,
                     rtc_enabled=rtc, inference_delay=0,
                     prev_chunk_left_over=previous if rtc else None,
+                    observation_time_ns=time.monotonic_ns() if p.is_v3(metadata) else None,
+                    context=synthetic_context(sample, metadata) if p.is_v3(metadata) and sample["provenance"].startswith("synthetic;") else None,
                 )
                 start = time.perf_counter()
                 ws.send(codec.dumps(request, encoding=encoding))
                 response = codec.loads(ws.recv(timeout=timeout), encoding=encoding)
-                actions = p.parse_response(response, request_id=request_id)
+                actions = p.parse_response(response, request_id=request_id, metadata=metadata)
                 elapsed_ms = (time.perf_counter() - start) * 1000
                 if semantic_checks:
-                    check_action_semantics(actions)
+                    check_action_semantics(actions, p.action_contract(metadata)["control_quantity"])
                 if actions.shape[0] != metadata["action_horizon"]:
                     warning = "returned T differs from action_horizon; confirm execution_steps and scheduling"
                     if warning not in result["warnings"]:
@@ -64,10 +66,13 @@ def check_connection(uri, encoding, sample, *, requests=2, timeout=30,
     return result
 
 
-def check_action_semantics(actions):
+def check_action_semantics(actions, control_quantity="pose_target"):
     """Extra diagnostics beyond core protocol shape/finite checks."""
-    if np.any((actions[:, [9, 19]] < 0) | (actions[:, [9, 19]] > 1)):
+    grips = [actions.shape[1] // 2 - 1, actions.shape[1] - 1]
+    if np.any((actions[:, grips] < 0) | (actions[:, grips] > 1)):
         raise ValueError("gripper values must lie in [0, 1]")
+    if control_quantity != "pose_target":
+        return
     for offset in (3, 13):
         first = actions[:, offset:offset + 3].astype(np.float64)
         second = actions[:, offset + 3:offset + 6].astype(np.float64)

@@ -9,6 +9,7 @@ import numpy as np
 
 from ._generated import *  # Generated public contract constants.
 from .codec import validate_image
+from . import v3
 
 
 def _vector(value, dim, name):
@@ -40,7 +41,8 @@ def cameras_for_arm(arm):
 def build_metadata(*, policy_hz, action_horizon=50, arm='both',
                    image_encoding='raw', image_resize='resize',
                    image_sizes=None, required_cameras=None, rtc_supported=False,
-                   requires_joint_state=False, execution_steps=None, extensions=None):
+                   requires_joint_state=False, execution_steps=None, extensions=None, version=2,
+                   action_spec=None, observation_spec=None, timing=None, reset_supported=False):
     meta = dict(type=METADATA_TYPE, protocol=PROTOCOL, policy_hz=policy_hz,
                 action_horizon=action_horizon, arm=arm, image_encoding=image_encoding,
                 image_resize=image_resize, image_sizes={} if image_sizes is None else dict(image_sizes),
@@ -50,6 +52,15 @@ def build_metadata(*, policy_hz, action_horizon=50, arm='both',
         meta['execution_steps'] = execution_steps
     if extensions is not None:
         meta['extensions'] = dict(extensions)
+    if version == 3:
+        meta['protocol'] = v3.PROTOCOL
+        meta['action_spec'] = v3.action_spec() if action_spec is None else dict(action_spec)
+        meta['observation_spec'] = dict(pose=True, joint=requires_joint_state, prompt=True,
+                                        history_steps=1, history_hz=policy_hz, context_keys=[]) if observation_spec is None else dict(observation_spec)
+        meta['timing'] = dict(action_dt=1 / policy_hz, first_target_offset_s=0) if timing is None else dict(timing)
+        meta['reset_supported'] = reset_supported
+    elif version != 2:
+        raise ValueError('unsupported protocol version')
     validate_metadata(meta)
     meta['policy_hz'] = float(meta['policy_hz'])
     meta['action_horizon'] = int(meta['action_horizon'])
@@ -61,7 +72,7 @@ def build_metadata(*, policy_hz, action_horizon=50, arm='both',
 
 
 def validate_metadata(meta, *, policy_hz=None, require_rtc=False):
-    validate_metadata_fields(meta)
+    (v3.validate_metadata if is_v3(meta) else validate_metadata_fields)(meta)
     if policy_hz is not None:
         validate_policy_hz(policy_hz)
         if not np.isclose(meta['policy_hz'], policy_hz):
@@ -74,10 +85,14 @@ def validate_metadata(meta, *, policy_hz=None, require_rtc=False):
 
 def build_request(*, request_id, prompt, state, images, metadata, joint_state=None,
                   rtc_enabled=False, inference_delay=0, prev_chunk_left_over=None,
-                  observation_time_ns=None):
+                  observation_time_ns=None, context=None):
     payload = dict(type=OBS_TYPE, request_id=request_id, prompt=prompt, state=state, images=images,
                    rtc_enabled=rtc_enabled, inference_delay=inference_delay,
                    prev_chunk_left_over=prev_chunk_left_over)
+    if is_v3(metadata) and state is None:
+        payload.pop('state')
+    if context is not None:
+        payload['context'] = context
     if joint_state is not None:
         payload['joint_state'] = joint_state
     if observation_time_ns is not None:
@@ -86,6 +101,8 @@ def build_request(*, request_id, prompt, state, images, metadata, joint_state=No
 
 
 def parse_request(payload, *, metadata):
+    if is_v3(metadata):
+        return v3.parse_request(payload, metadata)
     validate_obs_fields(payload)
     result = dict(payload)
     result['request_id'] = int(payload['request_id'])
@@ -129,12 +146,12 @@ def validate_images(images, *, metadata, decoded=False):
     return result
 
 
-def build_response(*, request_id, actions, server_timing=None, policy_timing=None, rtc_info=None):
+def build_response(*, request_id, actions, server_timing=None, policy_timing=None, rtc_info=None, metadata=None):
     result = dict(type=ACTION_TYPE, request_id=request_id, actions=actions)
     for key, block in (('server_timing', server_timing), ('policy_timing', policy_timing), ('rtc_info', rtc_info)):
         if block is not None:
             result[key] = dict(block)
-    result['actions'] = parse_response(result, request_id=request_id)
+    result['actions'] = parse_response(result, request_id=request_id, metadata=metadata)
     result['request_id'] = int(request_id)
     for key in ('server_timing', 'policy_timing'):
         if key in result:
@@ -149,12 +166,12 @@ def build_error(*, request_id, message, code='inference_error'):
     return result
 
 
-def parse_response(payload, *, request_id):
+def parse_response(payload, *, request_id, metadata=None):
     if not isinstance(payload, Mapping):
         raise ValueError('response must be an object')
     kind = payload.get('type')
     if kind == ACTION_TYPE:
-        validate_action_fields(payload)
+        (v3.fields.validate_action_fields if is_v3(metadata) else validate_action_fields)(payload)
     elif kind == ERROR_TYPE:
         validate_error_fields(payload)
     else:
@@ -164,4 +181,31 @@ def parse_response(payload, *, request_id):
         raise ValueError('response request_id does not match observation')
     if kind == ERROR_TYPE:
         raise RuntimeError(f'policy server {payload["code"]}: {payload["message"]}')
-    return _actions(payload['actions'])
+    return v3.actions(payload['actions'], metadata) if is_v3(metadata) else _actions(payload['actions'])
+
+
+def is_v3(metadata):
+    return isinstance(metadata, Mapping) and metadata.get('protocol') == v3.PROTOCOL
+
+
+def action_contract(metadata):
+    """Resolve the wire control type, including legacy v2 pose servers."""
+    return metadata['action_spec'] if is_v3(metadata) else v3.action_spec()
+
+
+def observation_contract(metadata):
+    return metadata['observation_spec'] if is_v3(metadata) else dict(
+        pose=True, joint=metadata.get('requires_joint_state', False), prompt=True,
+        history_steps=1, history_hz=metadata.get('policy_hz', 30), context_keys=[])
+
+
+def build_reset(*, request_id, metadata):
+    if not is_v3(metadata) or not metadata['reset_supported']:
+        raise ValueError('server does not support episode reset')
+    return v3.reset_message(request_id)
+
+
+def parse_reset_ack(payload, *, request_id):
+    v3.fields.validate_reset_ack_fields(payload)
+    if payload['request_id'] != request_id:
+        raise ValueError('reset acknowledgement request_id mismatch')
