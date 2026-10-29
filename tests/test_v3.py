@@ -1,18 +1,18 @@
 """Shared contract must work without any model framework or robot runtime."""
 import copy
 import json
-from pathlib import Path
 import runpy
 import subprocess
 import sys
+from pathlib import Path
 
 import jsonschema
 import numpy as np
 import pytest
+from g2_policy_protocol import codec
+from g2_policy_protocol import protocol as p
 
-from g2_policy_protocol import codec, protocol as p
-
-QUANTITIES = ('pose_target', 'joint_position', 'joint_velocity', 'eef_twist', 'joint_torque')
+QUANTITIES = ('pose_target', 'joint_position', 'joint_velocity', 'joint_torque')
 
 
 def metadata(quantity='pose_target', **kwargs):
@@ -109,3 +109,16 @@ assert contract.G2.pose.names == protocol.POSE_FIELDS
 assert contract.G2.joint.names == protocol.JOINT_FIELDS
 '''], capture_output=True, text=True, timeout=10)
     assert result.returncode == 0, result.stderr
+
+
+def test_removed_twist_is_rejected_by_action_spec_metadata_and_json_schema():
+    with pytest.raises(ValueError, match='unsupported control_quantity'):
+        p.v3.action_spec('eef_twist')
+    meta = metadata()
+    meta['action_spec']['control_quantity'] = 'eef_twist'
+    with pytest.raises(ValueError, match='unsupported value'):
+        p.validate_metadata(meta)
+    root = Path(__file__).resolve().parents[1]
+    schema = json.loads((root / 'src/g2_policy_protocol/g2.v3.schema.json').read_text())
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(json.loads(codec.json_dumps(meta)), schema)

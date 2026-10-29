@@ -10,7 +10,7 @@ server 负责声明模型能力、接收统一观测、适配模型输入，并�
 
 ## 安装
 
-**协议包固定为 `g2-policy-protocol==0.5.0`，与域控保持一致。** 在模型服务的 Python 环境中，进入本仓库根目录安装：
+**协议包固定为 `g2-policy-protocol==0.6.0`，与域控保持一致。** 在模型服务的 Python 环境中，进入本仓库根目录安装：
 
 ```bash
 python -m pip install -e '.[tools]'
@@ -21,7 +21,7 @@ python -m pip install -e '.[tools]'
 只有 wheel 时，可安装协议包和验收工具：
 
 ```bash
-python -m pip install '/path/to/g2_policy_protocol-0.5.0-py3-none-any.whl[tools]'
+python -m pip install '/path/to/g2_policy_protocol-0.6.0-py3-none-any.whl[tools]'
 ```
 
 wheel 不包含 examples 和 Markdown 文档；需要完整示例时使用源码交付包。安装或升级后先重启 GPU server，再启动域控 client。
@@ -90,7 +90,7 @@ g2-policy-check --url ws://127.0.0.1:8000 --report report.json
 5. 执行推理，将模型输出转换为握手声明的绝对控制量（v2 为 `base_link` 下 `(T,20)` pose；v3 为 `(T, action_spec.dim)`）。
 6. 构造 `action`，原样回传请求 ID；`build_response` 传入同一份 metadata。处理请求失败时返回 `error`。v3 且 `reset_supported` 时还应处理 `reset` → `reset_ack`。
 
-metadata 应声明实际的策略频率、动作 horizon、执行臂、必需相机、图像编码/尺寸/resize 方式、RTC 支持和关节状态需求。v3 还要声明 `action_spec`、`observation_spec`、`timing` 和 `reset_supported`。ACT 的 `execution_steps` 可以小于 `action_horizon`，以保留 temporal ensemble 的单步执行行为。模型名称等诊断信息可放入 `extensions`，不参与客户端执行判断。
+metadata 应声明实际的策略频率、动作 horizon、执行臂、必需相机、图像编码/尺寸/resize 方式、RTC 支持和关节状态需求。v3 还要声明 `action_spec`、`observation_spec`、`timing` 和 `reset_supported`。第一方 v3 服务声明 `extensions.response_mode: full_chunk`，每次返回完整预测 H 步；执行前缀 K 由 wholebody 的 `infer.execution_steps` 决定。LeRobot G2 服务目前拒绝尚未按目标时间对齐的 ACT temporal ensemble。模型名称等诊断信息可放入 `extensions`，不参与客户端执行判断。
 
 ## metadata 参数从哪里来
 
@@ -98,7 +98,7 @@ metadata 应声明实际的策略频率、动作 horizon、执行臂、必需相
 |---|---|---|
 | `policy_hz` | 无，必须传入 | 数据/训练的动作频率；不是 GPU 每秒推理次数，与域控约定匹配 |
 | `action_horizon` | 50 | 模型一次预测的步数，与实际模型配置一致 |
-| `execution_steps` | 不设置 | 此时 client 按 horizon 规划；需要较短执行前缀时显式声明，范围 1..horizon |
+| `execution_steps` | 不设置 | 旧服务的执行前缀建议，兼容范围 1..horizon；第一方新服务不声明此项，K 在客户端配置 |
 | `arm` | both | 模型的执行臂；v2 单臂也返回完整 pose20；v3 返回完整 `action_spec.dim`，未选侧保持实测或置零 |
 | `required_cameras` | 双臂三相机；单臂头部加同侧腕部 | 按模型真实输入声明。v2 至少一个；v3 允许空列表或只选腕部。不要照抄示例只声明头部 |
 | `image_encoding` | raw | 部署传输方式；声明 jpeg 时必须实现解码 |
@@ -110,7 +110,7 @@ metadata 应声明实际的策略频率、动作 horizon、执行臂、必需相
 
 `p.build_metadata()` 只构造和校验声明。默认 `version=2`。v3 额外字段用 `version=3` 填入，或显式传入 `action_spec` / `observation_spec` / `timing` / `reset_supported`。部署参数、实际预处理和推理逻辑必须使用一致的配置。
 
-例如 30 Hz、horizon=50：相邻动作相隔约 33.3 ms，50 步覆盖约 1.67 秒的动作时段，首末动作的采样时间差为 49/30 秒。不是每次 GPU 推理必须耗时 33.3 ms。`execution_steps=1` 表示按较短执行前缀规划，不代表把模型 horizon 改成 1；服务端是否截断输出、进行 temporal ensemble，也必须在模型适配中明确。域控的实际发起推理时机还受补充策略和延迟影响。
+例如 30 Hz、horizon=50：相邻动作相隔约 33.3 ms，50 步覆盖约 1.67 秒的动作时段，首末动作的采样时间差为 49/30 秒。不是每次 GPU 推理必须耗时 33.3 ms。第一方服务返回完整 50 步，客户端可通过 `infer.execution_steps` 选择最多执行其中 K 步（K≤50）；K 不改变模型 horizon 或服务端响应长度。域控的实际发起推理时机还受补充策略和延迟影响。
 
 ## v2 与 v3
 
@@ -210,7 +210,7 @@ g2-policy-check --report jpeg-report.json
 
 ## 独立验收
 
-工具根据 metadata 选择相机、缩放尺寸、raw/JPEG 编码和可选 joint_state，检查 metadata、响应类型、请求 ID、非空 `(T, D)` 动作及有限值（v2 的 D=20，v3 的 D=`action_spec.dim`）。额外检查夹爪在 `[0,1]` 内、rot6d 两列非退化；这些是工具附加诊断，不是核心解析器的新规则。`--protocol-only` 可跳过附加诊断。返回 T 与 `action_horizon` 不同时记录警告，需结合 `execution_steps` 和实际调度确认。
+工具根据 metadata 选择相机、缩放尺寸、raw/JPEG 编码和可选 joint_state，检查 metadata、响应类型、请求 ID、非空 `(T, D)` 动作及有限值（v2 的 D=20，v3 的 D=`action_spec.dim`）。额外检查夹爪在 `[0,1]` 内、rot6d 两列非退化；这些是工具附加诊断，不是核心解析器的新规则。`--protocol-only` 可跳过附加诊断。声明 `full_chunk` 的服务必须返回 T=`action_horizon`，不符时公共响应解析直接报错；其余兼容服务返回长度不符时记录警告，需结合实际调度确认。
 
 默认使用明确标注为 synthetic 的合成观测。全套通过只代表该输入下的协议接入成功，不能证明模型质量、坐标系正确、动作可达、真实图像预处理一致或推理能满足机器人运行时限。报告中的 `round_trip_ms` 包含通信与处理时间，不等于 GPU 推理时间。
 

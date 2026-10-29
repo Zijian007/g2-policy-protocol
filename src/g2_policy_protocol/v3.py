@@ -14,9 +14,6 @@ def action_spec(control_quantity="pose_target"):
     if control_quantity == "pose_target":
         names = ["x", "y", "z"] + [f"rot6d_{i}" for i in range(6)] + ["gripper"]
         units = ["m"] * 3 + ["dimensionless"] * 6 + ["close_ratio"]
-    elif control_quantity == "eef_twist":
-        names = ["vx", "vy", "vz", "wx", "wy", "wz", "gripper"]
-        units = ["m/s"] * 3 + ["rad/s"] * 3 + ["close_ratio"]
     elif control_quantity in ("joint_position", "joint_velocity", "joint_torque"):
         names = [f"joint_{i}" for i in range(1, 8)] + ["gripper"]
         units = [{"joint_position": "rad", "joint_velocity": "rad/s", "joint_torque": "N*m"}[control_quantity]] * 7 + [
@@ -65,6 +62,7 @@ def context(payload, metadata):
     value = payload.get("context", {})
     allowed = (
         "command_pose",
+        "command_joint",
         "previous_command_pose",
         "object_pose",
         "object_joint",
@@ -108,7 +106,7 @@ def context(payload, metadata):
                 raise ValueError(f"{name} must be finite (L, {width})")
             result[name] = arr
         else:
-            result[name] = finite_vector(item, 16 if name in ("object_joint", "start_joint") else 20, name)
+            result[name] = finite_vector(item, 16 if name in ("object_joint", "start_joint", "command_joint") else 20, name)
     return result
 
 

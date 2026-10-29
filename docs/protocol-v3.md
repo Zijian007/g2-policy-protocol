@@ -1,6 +1,6 @@
 # g2.policy.v3
 
-v3 为不同模型声明相同的 G2 观测和控制契约。v2 pose20 API 仍保留，client 按握手 `protocol` 选择校验。私有 `g2.openpi.v1` 已移除。升级 v3 服务时必须同步升级客户端到 `g2-policy-protocol==0.5.0`：0.4.1 会把 `action_spec`、`observation_spec`、`reset_supported`、`timing` 判为 unknown 并断开。当前 OpenPI G2 server 发送 `g2.policy.v3`。
+v3 为不同模型声明相同的 G2 观测和控制契约。v2 pose20 API 仍保留，client 按握手 `protocol` 选择校验。私有 `g2.openpi.v1` 已移除。升级 v3 服务时必须同步升级客户端到 `g2-policy-protocol==0.6.0`：0.4.1 会把 `action_spec`、`observation_spec`、`reset_supported`、`timing` 判为 unknown 并断开。当前 OpenPI G2 server 发送 `g2.policy.v3`。
 
 基础握手保留 action_horizon、policy_hz、arm、required_cameras、图像传输设置、rtc_supported、requires_joint_state。新增：
 
@@ -21,14 +21,13 @@ v3 为不同模型声明相同的 G2 观测和控制契约。v2 pose20 API 仍�
 | pose_target | 20 | xyz 米、rot6d 两列按 F 顺序、gripper |
 | joint_position | 16 | 7 关节 rad、gripper |
 | joint_velocity | 16 | 7 关节 rad/s、gripper |
-| eef_twist | 14 | 原点线速度 m/s、角速度 rad/s、gripper |
 | joint_torque | 16 | 7 关节 N*m、gripper |
 
-位姿和 twist 使用 base_link 下的 flange；TCP、局部参考、delta 或旋转表示由模型适配层转换。关节按 joint_fields 顺序。`arm` 限定实际执行侧，另一侧位置保持实测值，另一侧速度/力矩为零。
+位姿使用 base_link 下的 flange；TCP、局部参考、delta 或旋转表示由模型适配层转换。关节按 joint_fields 顺序。`arm` 限定实际执行侧，另一侧位置保持实测值，另一侧速度/力矩为零。
 
 请求为 `type=obs`、request_id、可选 prompt/state/joint_state、images、context、observation_time_ns 与可选 RTC 字段。历史 L>1 时必须给 observation_time_ns（客户端本机单调时钟）；历史从最旧到当前时刻，间隔 1/history_hz。服务端不将这个值与另一台机器的时钟相减。
 
-context 支持 command_pose、previous_command_pose、start_pose、start_joint、object_pose、object_joint、base_to_parent、pose_history、joint_history、image_history。位姿、关节参考分别为20/16维，坐标系变换为有效4×4刚体矩阵。历史形状为 (L,20)/(L,16)，相机历史为按相机名组织的原始 RGB uint8 (L,H,W,3)，尺寸遵循 image_sizes；当前 images 可使用 JPEG。context 的必需字段由 observation_spec 声明。相对关节状态仅要求 start_joint/object_joint；相对 EEF 状态要求 start_pose/object_pose，联合状态要求两类参考。previous_command_pose 对应 observation_time_ns - 1/history_hz 的命令，而不是上一拍机器人控制发布值。
+context 支持 command_pose、command_joint、previous_command_pose、start_pose、start_joint、object_pose、object_joint、base_to_parent、pose_history、joint_history、image_history。位姿、关节参考分别为20/16维，坐标系变换为有效4×4刚体矩阵。历史形状为 (L,20)/(L,16)，相机历史为按相机名组织的原始 RGB uint8 (L,H,W,3)，尺寸遵循 image_sizes；当前 images 可使用 JPEG。context 的必需字段由 observation_spec 声明。当前训练配置若相对指令，只声明 command_pose / command_joint；其余键仍可在握手中选用。previous_command_pose 对应 observation_time_ns - 1/history_hz 的命令，而不是上一拍机器人控制发布值。
 
 响应 `type=action`、相同 request_id、有限数组 actions(T,D)，1≤T≤H，可携带 timing/rtc_info。调用 `build_response(..., metadata=meta)`、`parse_response(..., metadata=meta)` 校验 D。RTC prefix 也必须使用相同控制量和 D，delay 不得超过 prefix 或 H。支持 RTC 不意味着客户端负责某种特定模型的 guidance 算法。
 

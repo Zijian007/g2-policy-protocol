@@ -4,6 +4,8 @@ import dataclasses
 
 import numpy as np
 
+from .schema import QUANTITIES, action_branch
+
 
 def rotation_matrix(value, representation="rot6d"):
     """Project rot6d onto SO(3); quaternions use xyzw, axis angles use radians."""
@@ -87,8 +89,8 @@ def convert_pose(pose, settings, *, inverse=False):
     return np.concatenate(pieces, axis=-1)
 
 
-def pose_settings(policy, obs):
-    settings = dict(policy["pose"])
+def pose_settings(coordinates, obs):
+    settings = dict(coordinates)
     if isinstance(settings.get("base_to_parent"), str) and settings["base_to_parent"] == "observation":
         if "observation/base_to_parent" not in obs:
             raise ValueError("Dynamic parent frame requires observation/base_to_parent")
@@ -100,43 +102,99 @@ def pose_settings(policy, obs):
 
 
 def action_dimensions(policy, arm="both"):
-    action = policy["action"]
-    width = {
-        "pose_target": 4 + {"rot6d": 6, "quaternion": 4, "axis_angle": 3}[policy["pose"]["rotation"]],
-        "joint_position": 8,
-        "joint_velocity": 8,
-        "eef_twist": 7,
-        "joint_torque": 8,
-    }[action["control_quantity"]]
-    wire = (
-        20 if action["control_quantity"] == "pose_target" else 14 if action["control_quantity"] == "eef_twist" else 16
-    )
-    return width * (2 if arm == "both" else 1), wire
+    kind, spec = action_branch(policy)
+    quantity = QUANTITIES[kind].get(spec["quantity"])
+    if quantity == "pose_target":
+        width = 4 + {"rot6d": 6, "quaternion": 4, "axis_angle": 3}[spec["coordinates"]["rotation"]]
+        return width * (2 if arm == "both" else 1), 20
+    if quantity in ("joint_position", "joint_velocity", "joint_torque"):
+        return 8 * (2 if arm == "both" else 1), 16
+    raise ValueError(f"Unsupported G2 control quantity: {spec['quantity']!r}")
 
 
-def reference_pose(data, name):
-    keys = {
-        "current_measured_pose": "observation/pose",
-        "current_command_pose": "observation/command_pose",
-        "previous_command_pose": "observation/previous_command_pose",
-        "episode_start_pose": "observation/start_pose",
-        "object_pose": "observation/object_pose",
-    }
-    key = keys[name]
-    if key not in data:
-        raise ValueError(f"Reference {name} requires {key}")
-    result = np.asarray(data[key], dtype=np.float32)
+def source_pose(obs, source):
+    key = "observation/pose" if source == "state" else "observation/command_pose"
+    if key not in obs:
+        raise ValueError(f"Reference {source} requires {key}")
+    result = np.asarray(obs[key], dtype=np.float32)
     if result.shape != (20,) or not np.isfinite(result).all():
         raise ValueError(f"{key} must be a finite full (20,) EEF pose")
     return result
 
 
-def policy_reference(policy, obs, name):
-    settings = pose_settings(policy, obs)
-    if name == "object_pose":
-        # An object is not a flange: its origin must not be moved by tool calibration.
-        settings["flange_to_tcp"] = None
-    return convert_pose(reference_pose(obs, name), settings)
+def source_joint(obs, source):
+    key = "observation/joint" if source == "state" else "observation/command_joint"
+    if key not in obs:
+        raise ValueError(f"Reference {source} requires {key}")
+    result = np.asarray(obs[key], dtype=np.float32)
+    if result.shape != (16,) or not np.isfinite(result).all():
+        raise ValueError(f"{key} must be a finite full (16,) joint vector")
+    return result
+
+
+def measured_pose(obs):
+    return source_pose(obs, "state")
+
+
+def measured_joint(obs):
+    return source_joint(obs, "state")
+
+
+def encode_poses(values, obs, spec):
+    settings = pose_settings(spec["coordinates"], obs)
+    values = convert_pose(np.asarray(values, dtype=np.float32), settings)
+    if not spec["delta"]:
+        return values
+    ref = convert_pose(source_pose(obs, spec["reference"]["source"]), settings)
+    return pose_delta(values, ref, spec, settings["rotation"], inverse=False)
+
+
+def decode_poses(values, obs, spec):
+    settings = pose_settings(spec["coordinates"], obs)
+    if spec["delta"]:
+        ref = convert_pose(source_pose(obs, spec["reference"]["source"]), settings)
+        values = pose_delta(values, ref, spec, settings["rotation"], inverse=True)
+    return convert_pose(values, settings, inverse=True)
+
+
+def pose_delta(values, ref, spec, rotation, *, inverse):
+    width = len(ref) // 2
+    step = spec["reference"]["scope"] == "step"
+    if spec["method"] == "component":
+        mask = np.tile([True] * (width - 1) + [False], 2)
+        out = values.copy()
+        if inverse:
+            out[..., mask] = (np.cumsum(values[..., mask], axis=0) if step else values[..., mask]) + ref[mask]
+        else:
+            refs = np.concatenate([ref[None], values[:-1]], axis=0) if step else ref
+            out[..., mask] -= refs[..., mask]
+        return out
+    out = []
+    current = ref.copy()
+    for value in values:
+        parts = []
+        for offset in (0, width):
+            p, r = value[offset : offset + width], current[offset : offset + width]
+            tp, tr = pose_matrix(p, rotation), pose_matrix(r, rotation)
+            t = tr @ tp if inverse else np.linalg.inv(tr) @ tp
+            parts.append(matrix_pose(t, p[-1], rotation))
+        result = np.concatenate(parts)
+        out.append(result)
+        if step:
+            current = result if inverse else value
+    return np.asarray(out, dtype=np.float32)
+
+
+def joint_delta(values, ref, spec, *, inverse):
+    mask = np.tile([True] * 7 + [False], 2)
+    step = spec["reference"]["scope"] == "step"
+    out = values.copy()
+    if inverse:
+        out[..., mask] = (np.cumsum(values[..., mask], axis=0) if step else values[..., mask]) + ref[mask]
+    else:
+        refs = np.concatenate([ref[None], values[:-1]], axis=0) if step else ref
+        out[..., mask] -= refs[..., mask]
+    return out
 
 
 @dataclasses.dataclass(frozen=True)
@@ -155,109 +213,43 @@ class ActionCodec:
         return slice(None) if self.arm == "both" else slice(0, half) if self.arm == "left" else slice(half, dim)
 
     def encode(self, actions, obs):
-        action = self.policy["action"]
+        kind, spec = action_branch(self.policy)
+        quantity = QUANTITIES[kind].get(spec["quantity"])
         values = np.asarray(actions, dtype=np.float32).copy()
         if values.ndim != 2 or values.shape[-1] != self.dimensions[1] or not np.isfinite(values).all():
             raise ValueError(f"Actions must be finite (T, {self.dimensions[1]}) wire values")
-        if action["control_quantity"] == "pose_target":
-            values = convert_pose(values, pose_settings(self.policy, obs))
-            if action["representation"] != "absolute":
-                ref = policy_reference(self.policy, obs, action["relative_to"])
-                values = self._pose_delta(values, ref, inverse=False)
-        elif action["control_quantity"] in (
-            "joint_position",
-            "joint_velocity",
-            "joint_torque",
-        ):
-            if action["representation"] == "component_delta":
-                ref = np.asarray(obs["observation/joint"])
-                refs = np.concatenate([ref[None], values[:-1]], axis=0) if action["delta_scope"] == "step" else ref
-                mask = np.tile([True] * 7 + [False], 2)
-                values[..., mask] -= refs[..., mask]
-        elif self.policy["pose"].get("base_to_parent") is not None:
-            r = np.asarray(pose_settings(self.policy, obs)["base_to_parent"])[:3, :3]
-            for offset in (0, 7):
-                values[..., offset : offset + 3] = values[..., offset : offset + 3] @ r.T
-                values[..., offset + 3 : offset + 6] = values[..., offset + 3 : offset + 6] @ r.T
+        if quantity == "pose_target":
+            values = encode_poses(values, obs, spec)
+        elif spec["delta"]:
+            values = joint_delta(values, source_joint(obs, spec["reference"]["source"]), spec, inverse=False)
         return values[..., self._selection(values.shape[-1])].copy()
 
     def decode(self, actions, obs):
-        action = self.policy["action"]
+        kind, spec = action_branch(self.policy)
+        quantity = QUANTITIES[kind].get(spec["quantity"])
         encoded_dim, wire_dim = self.dimensions
         values = np.asarray(actions, dtype=np.float32)
         if values.ndim != 2 or not len(values) or values.shape[-1] < encoded_dim or not np.isfinite(values).all():
             raise ValueError(f"Model actions must be finite with at least {encoded_dim} columns")
         values = values[..., :encoded_dim].copy()
         if self.arm != "both":
-            if action["control_quantity"] == "pose_target":
-                full = convert_pose(
-                    reference_pose(obs, "current_measured_pose"),
-                    pose_settings(self.policy, obs),
-                )
-            elif action["control_quantity"] == "joint_position":
-                full = np.asarray(obs["observation/joint"])
+            if quantity == "pose_target":
+                full = convert_pose(measured_pose(obs), pose_settings(spec["coordinates"], obs))
+            elif quantity == "joint_position":
+                full = measured_joint(obs)
             else:
                 full = np.zeros(wire_dim, dtype=np.float32)
             values_full = np.broadcast_to(full, (len(values), len(full))).copy()
             values_full[..., self._selection(len(full))] = values
             values = values_full
-        if action["control_quantity"] == "pose_target":
-            if action["representation"] != "absolute":
-                ref = policy_reference(self.policy, obs, action["relative_to"])
-                values = self._pose_delta(values, ref, inverse=True)
-            values = convert_pose(values, pose_settings(self.policy, obs), inverse=True)
+        if quantity == "pose_target":
+            values = decode_poses(values, obs, spec)
             if self.arm != "both":
                 other = slice(10, 20) if self.arm == "left" else slice(0, 10)
-                values[..., other] = reference_pose(obs, "current_measured_pose")[other]
-        elif action["representation"] == "component_delta":
-            ref = np.asarray(obs["observation/joint"])
-            mask = np.tile([True] * 7 + [False], 2)
-            if action["delta_scope"] == "step":
-                values[..., mask] = np.cumsum(values[..., mask], axis=0) + ref[mask]
-            else:
-                values[..., mask] += ref[mask]
+                values[..., other] = measured_pose(obs)[other]
+        elif spec["delta"]:
+            values = joint_delta(values, source_joint(obs, spec["reference"]["source"]), spec, inverse=True)
             if self.arm != "both":
                 other = slice(8, 16) if self.arm == "left" else slice(0, 8)
-                values[..., other] = ref[other]
-        elif action["control_quantity"] == "eef_twist" and self.policy["pose"].get("base_to_parent") is not None:
-            r = np.asarray(pose_settings(self.policy, obs)["base_to_parent"])[:3, :3]
-            for offset in (0, 7):
-                values[..., offset : offset + 3] = values[..., offset : offset + 3] @ r
-                values[..., offset + 3 : offset + 6] = values[..., offset + 3 : offset + 6] @ r
+                values[..., other] = measured_joint(obs)[other]
         return values
-
-    def _pose_delta(self, values, ref, *, inverse):
-        representation = self.policy["action"]["representation"]
-        rotation = self.policy["pose"]["rotation"]
-        width = len(ref) // 2
-        step = self.policy["action"]["delta_scope"] == "step"
-        if representation == "component_delta":
-            mask = np.tile([True] * (width - 1) + [False], 2)
-            out = values.copy()
-            if inverse:
-                out[..., mask] = (np.cumsum(values[..., mask], axis=0) if step else values[..., mask]) + ref[mask]
-            else:
-                refs = np.concatenate([ref[None], values[:-1]], axis=0) if step else ref
-                out[..., mask] -= refs[..., mask]
-            return out
-        out = []
-        current = ref.copy()
-        for value in values:
-            parts = []
-            for offset in (0, width):
-                p, r = value[offset : offset + width], current[offset : offset + width]
-                tp, tr = pose_matrix(p, rotation), pose_matrix(r, rotation)
-                if representation == "se3_body_delta":
-                    t = tr @ tp if inverse else np.linalg.inv(tr) @ tp
-                elif representation == "se3_spatial_delta":
-                    t = tp @ tr if inverse else tp @ np.linalg.inv(tr)
-                else:  # Translation in parent coordinates, orientation relative to the reference EE.
-                    t = tp.copy()
-                    t[:3, :3] = tr[:3, :3] @ tp[:3, :3] if inverse else tr[:3, :3].T @ tp[:3, :3]
-                    t[:3, 3] = p[:3] + r[:3] if inverse else p[:3] - r[:3]
-                parts.append(matrix_pose(t, p[-1], rotation))
-            result = np.concatenate(parts)
-            out.append(result)
-            if step:
-                current = result if inverse else value
-        return np.asarray(out, dtype=np.float32)

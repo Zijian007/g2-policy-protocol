@@ -203,7 +203,11 @@ def parse_response(payload, *, request_id, metadata=None):
         raise ValueError('response request_id does not match observation')
     if kind == ERROR_TYPE:
         raise RuntimeError(f'policy server {payload["code"]}: {payload["message"]}')
-    return parse_actions(payload['actions'], metadata)
+    actions = parse_actions(payload['actions'], metadata)
+    if is_v3(metadata) and metadata.get('extensions', {}).get('response_mode') == 'full_chunk':
+        if len(actions) != metadata['action_horizon']:
+            raise ValueError('full_chunk response must contain action_horizon actions')
+    return actions
 
 
 def build_reset(*, request_id, metadata):

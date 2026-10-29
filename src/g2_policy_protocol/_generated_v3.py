@@ -90,7 +90,7 @@ def validate_metadata_fields(payload):
     if 'extensions' in payload:
         _object_fields(payload['extensions'], 'metadata.extensions', fields=None, required=())
     _object_fields(payload['action_spec'], 'metadata.action_spec', fields=('control_quantity', 'dim', 'fields', 'units', 'frame', 'ee_frame', 'representation'), required=('control_quantity', 'dim', 'fields', 'units', 'frame', 'ee_frame', 'representation'))
-    if payload['action_spec']['control_quantity'] not in ('pose_target', 'joint_position', 'joint_velocity', 'eef_twist', 'joint_torque'):
+    if payload['action_spec']['control_quantity'] not in ('pose_target', 'joint_position', 'joint_velocity', 'joint_torque'):
         raise ValueError('metadata.action_spec.control_quantity' + " has an unsupported value")
     _integer(payload['action_spec']['dim'], 'metadata.action_spec.dim', minimum=1)
     _array(payload['action_spec']['fields'], 'metadata.action_spec.fields', minimum=1, maximum=None, unique=True)
@@ -116,7 +116,7 @@ def validate_metadata_fields(payload):
     _number(payload['observation_spec']['history_hz'], 'metadata.observation_spec.history_hz', exclusive_minimum=0)
     _array(payload['observation_spec']['context_keys'], 'metadata.observation_spec.context_keys', minimum=None, maximum=None, unique=True)
     for item1 in payload['observation_spec']['context_keys']:
-        if item1 not in ('command_pose', 'previous_command_pose', 'object_pose', 'object_joint', 'start_pose', 'start_joint', 'base_to_parent', 'pose_history', 'joint_history', 'image_history'):
+        if item1 not in ('command_pose', 'command_joint', 'previous_command_pose', 'object_pose', 'object_joint', 'start_pose', 'start_joint', 'base_to_parent', 'pose_history', 'joint_history', 'image_history'):
             raise ValueError('metadata.observation_spec.context_keys' + " has an unsupported value")
     _object_fields(payload['timing'], 'metadata.timing', fields=('action_dt', 'first_target_offset_s'), required=('action_dt', 'first_target_offset_s'))
     _number(payload['timing']['action_dt'], 'metadata.timing.action_dt', exclusive_minimum=0)

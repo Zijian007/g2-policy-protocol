@@ -54,12 +54,12 @@ PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest
 python -m pip wheel --no-index --no-deps --no-build-isolation . -w dist
 ```
 
-当前发布包为 `g2_policy_protocol-0.5.0-py3-none-any.whl`。发布新版本时同步更新版本声明、调用方依赖和相关文档；涉及不兼容契约变更时，明确通信协议的兼容边界。0.5.0 增加 `g2.policy.v3`，仍接受 `g2.policy.v2`；0.4.1 client 不能连接 v3 server。
+当前发布包为 `g2_policy_protocol-0.6.0-py3-none-any.whl`。发布新版本时同步更新版本声明、调用方依赖和相关文档；涉及不兼容契约变更时，明确通信协议的兼容边界。0.6.0 增加 `g2.policy.v3`，仍接受 `g2.policy.v2`；0.4.1 client 不能连接 v3 server。
 
 部署时：
 
 1. 为域控和 GPU 环境分发同一版本的源码或同一个 wheel。
-2. 同步更新 wholebody、G2_pi / OpenPI 中相应的接入代码和依赖。
+2. 同步更新 wholebody、lerobot-finetune / OpenPI 中相应的接入代码和依赖。
 3. 两端安装同一版本协议包。
 4. 重启 GPU server 后再启动域控 client，验证能力握手和观测/动作往返。
 
@@ -75,4 +75,4 @@ python -m pip wheel --no-index --no-deps --no-build-isolation . -w dist
 python tools/build_handoff.py
 ```
 
-产物 `dist/g2-policy-protocol-handoff.zip` 包含源码、文档、示例、生成工具和测试；不包含 `.git`、构建缓存、模型权重或观测录制。接收者解压后可以独立安装、开发并验收，无需 wholebody、G2_pi 或 OpenPI 仓库。版本要求仍与域控一致；0.5.0 同时交付 v2 与 v3 契约。
+产物 `dist/g2-policy-protocol-handoff.zip` 包含源码、文档、示例、生成工具和测试；不包含 `.git`、构建缓存、模型权重或观测录制。接收者解压后可以独立安装、开发并验收，无需 wholebody、lerobot-finetune 或 OpenPI 仓库。版本要求仍与域控一致；0.6.0 同时交付 v2 与 v3 契约。

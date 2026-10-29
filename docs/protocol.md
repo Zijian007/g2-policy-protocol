@@ -1,4 +1,4 @@
-> 本文只描述保留兼容的 `g2.policy.v2`。v3 见 [protocol-v3.md](protocol-v3.md)。0.5.0 同一个发行包同时提供两版；client 按握手 `protocol` 分流。
+> 本文只描述保留兼容的 `g2.policy.v2`。v3 见 [protocol-v3.md](protocol-v3.md)。0.6.0 同一个发行包同时提供两版；client 按握手 `protocol` 分流。
 
 # 协议参考（v2）
 
@@ -110,6 +110,6 @@ Schema 描述静态结构，Python 校验动态 shape、有限值、相机/RTC �
 
 ## 版本边界
 
-包版本 `0.5.0` 同时提供 `g2.policy.v2` 和 `g2.policy.v3`。v2 删除握手中的 `schema_version / state_layout / action_layout / frame / rotation / action_semantics / encoding / policy_type`，不兼容 `g2.policy.v1` 和更早的两套 G2 消息。v3 在握手中新增 `action_spec`、`observation_spec`、`timing`、`reset_supported`；0.4.1 会把这些字段判为 unknown。
+包版本 `0.6.0` 同时提供 `g2.policy.v2` 和 `g2.policy.v3`。v2 删除握手中的 `schema_version / state_layout / action_layout / frame / rotation / action_semantics / encoding / policy_type`，不兼容 `g2.policy.v1` 和更早的两套 G2 消息。v3 在握手中新增 `action_spec`、`observation_spec`、`timing`、`reset_supported`；0.4.1 会把这些字段判为 unknown。
 
-域控与 GPU 两端必须同步安装 0.5.0、更新代码并重启。v3 服务不能搭配 0.4.1 client。协议升级步骤见[开发与发布](development.md)。
+域控与 GPU 两端必须同步安装 0.6.0、更新代码并重启。v3 服务不能搭配 0.4.1 client。协议升级步骤见[开发与发布](development.md)。

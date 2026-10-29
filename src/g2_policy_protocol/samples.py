@@ -107,7 +107,7 @@ def synthetic_context(sample, metadata):
     spec = p.observation_contract(metadata)
     pose, joint = sample['state'], sample.get('joint_state', np.zeros(16, np.float32))
     length = spec['history_steps']
-    values = dict(command_pose=pose, previous_command_pose=pose, object_pose=pose,
+    values = dict(command_pose=pose, command_joint=joint, previous_command_pose=pose, object_pose=pose,
                   start_pose=pose, start_joint=joint, object_joint=joint, base_to_parent=np.eye(4),
                   pose_history=np.tile(pose, (length, 1)), joint_history=np.tile(joint, (length, 1)))
     raw = prepare_images(sample, {**metadata, 'image_encoding': 'raw'})

@@ -173,7 +173,6 @@
                 "pose_target",
                 "joint_position",
                 "joint_velocity",
-                "eef_twist",
                 "joint_torque"
               ]
             },
@@ -244,6 +243,7 @@
               "items": {
                 "enum": [
                   "command_pose",
+                  "command_joint",
                   "previous_command_pose",
                   "object_pose",
                   "object_joint",

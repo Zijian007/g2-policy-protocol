@@ -18,12 +18,12 @@ python -m pip install /path/to/g2-policy-protocol
 跨机部署也可以安装分发的 wheel：
 
 ```bash
-python -m pip install /path/to/g2_policy_protocol-0.5.0-py3-none-any.whl
+python -m pip install /path/to/g2_policy_protocol-0.6.0-py3-none-any.whl
 ```
 
 源码安装以上述路径为准；需要可编辑安装时使用 `python -m pip install -e /path/to/g2-policy-protocol`。域控只需安装协议包及 wholebody 自身的运行依赖，无需为通信安装 Torch、JAX 或 LeRobot。
 
-**GPU server 必须同时使用 0.5.0 和兼容的服务代码。** 安装或升级后先重启 GPU server，再启动 client。0.4.1 只能校验 `g2.policy.v2`；接到 v3 metadata 时会报 `unknown=['action_spec', 'observation_spec', 'reset_supported', 'timing']`。
+**GPU server 必须同时使用 0.6.0 和兼容的服务代码。** 安装或升级后先重启 GPU server，再启动 client。0.4.1 只能校验 `g2.policy.v2`；接到 v3 metadata 时会报 `unknown=['action_spec', 'observation_spec', 'reset_supported', 'timing']`。
 
 ## 在 wholebody 中使用
 

@@ -10,7 +10,7 @@
 | 模型适配 | 各 policy 实现 canonical request → 模型观测 → canonical actions；OpenPI 用 `OpenPIBackend`，训练转换也使用同一个 `ActionCodec` |
 | 机器人执行 | wholebody 的观测采集、时间队列、插值、安全门、HAL；按 `control_quantity` 选择绑定的 executor |
 
-两个 Python 命名空间暂由同一个 `g2-policy-protocol==0.5.0` 轻量发行包提供，便于三个仓库同步升级。域控与 GPU 必须同装这一版本：v3 server 发给 0.4.1 client 会在握手时被拒。基础依赖是 numpy/msgpack；几何旋转使用可选 `geometry` extra 的 SciPy，WebSocket server 使用 `tools` extra。导入协议不加载模型或机器人运行时。原 `openpi.adapters.g2` 与 `wholebody.shared.g2_lerobot_contract` 的导入路径保留兼容转发。
+两个 Python 命名空间暂由同一个 `g2-policy-protocol==0.6.0` 轻量发行包提供，便于三个仓库同步升级。域控与 GPU 必须同装这一版本：v3 server 发给 0.4.1 client 会在握手时被拒。基础依赖是 numpy/msgpack；几何旋转使用可选 `geometry` extra 的 SciPy，WebSocket server 使用 `tools` extra。导入协议不加载模型或机器人运行时。原 `openpi.adapters.g2` 与 `wholebody.shared.g2_lerobot_contract` 的导入路径保留兼容转发。
 
 模型内部可以预测 delta、SE(3)、不同旋转表示、单臂或补齐维度；适配器必须还原到声明的完整双臂绝对控制量。协议不会传输 Pi05 token 设置、归一化参数、LoRA 或 padded action_dim=32。
 
@@ -21,7 +21,7 @@
 3. 用 `protocol.build_metadata(version=3, ...)` 声明真实能力，并交给 `PolicyServer`。需要 RTC 时自行实现对应算法，只有实现后才声明支持。
 4. wholebody 校验该控制量已有 executor，且能提供所有观测。接入一种新模型不需要添加客户端模型分支。
 
-当前真实应用入口绑定 `pose_target`（EE 安全门）和 `joint_position`（Gello 真机关节限位 + 每拍 slew 转成 rad/s，经 `ArmJointPublisher`）。速度、twist、力矩的协议和数据转换已支持；这些执行器尚未绑定，应用在打开硬件前拒绝。
+当前真实应用入口绑定 `pose_target`（EE 安全门）和 `joint_position`（Gello 真机关节限位 + 每拍 slew 转成 rad/s，经 `ArmJointPublisher`）。关节速度、力矩的协议和数据转换已支持；这些执行器尚未绑定，应用在打开硬件前拒绝。
 
 历史策略通过独立采样线程在 `history_hz` 上采集，episode 开头重复首帧，之后的采样缺口会报错。命令、物体、动态坐标系需要显式 provider，不能从当前实测末端伪造。默认应用支持历史和 episode 起点；外部 provider 在 `PolicyControlLoop(context_provider=...)` 接入。
 
