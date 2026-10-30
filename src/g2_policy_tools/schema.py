@@ -159,14 +159,6 @@ def compile_policy(policy):
     return policy
 
 
-def compile_input(settings):
-    if settings.get("schema_version") != 6:
-        raise ValueError("schema_version: 6")
-    result = copy.deepcopy(settings)
-    result["policy"] = compile_policy(result["policy"])
-    return result
-
-
 def public_settings(settings):
     return copy.deepcopy(settings)
 

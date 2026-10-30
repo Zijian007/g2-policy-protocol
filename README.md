@@ -23,6 +23,7 @@ wholebody（域控 / client）                 lerobot-finetune / OpenPI（GPU /
 | v3 接入 | [v3 协议](docs/protocol-v3.md) | action_spec、observation_spec、timing、reset、控制量 |
 | 多模型分层 | [分层接入](docs/architecture.md) | PolicyBackend、几何工具、执行器绑定 |
 | 训练调试 | [policy 字段速查](docs/policy-config.md) | state/action 候选、条件约束、坐标与切换示例 |
+| 训练配置 | [公共训练配置](docs/training-config.md) | OpenPI / LeRobot 公共字段、后端选项和 checkpoint 格式 |
 | 协议维护人员 | [开发与发布](docs/development.md) | Schema、代码生成、测试、打包与跨端升级 |
 
 ## 安装与版本要求

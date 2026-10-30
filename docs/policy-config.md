@@ -1,6 +1,6 @@
 # G2 训练 policy 字段速查
 
-LeRobot 和 OpenPI 使用同一套 `policy` 树；填好的 YAML 就是运行时契约，没有另一套编译字段。OpenPI 训练配置外层为 `schema_version: 6`；LeRobot 的 `policy` 节点相同，不额外声明版本。候选值与组合约束由 [schema.py](../src/g2_policy_tools/schema.py) 校验。框架怎么跑训练见各自 `scripts/g2/docs/training.md`。
+LeRobot 和 OpenPI 使用同一套 `policy` 树；填好的 YAML 就是运行时契约，没有另一套编译字段。两边训练配置外层统一为 `schema_version: 7`，公共训练字段见[训练配置](training-config.md)。候选值与组合约束由 [schema.py](../src/g2_policy_tools/schema.py) 校验。框架怎么跑训练见各自 `scripts/g2/docs/training.md`。
 
 ## 按问题配置
 
@@ -104,6 +104,6 @@ source 是“从哪里取初始参考”；scope 是“预测或历史序列如�
 | `history_steps` | 正整数 | 历史帧数，须匹配模型输入能力。 |
 | `target_offset_steps` | 非负整数 | 首目标距当前观测的采样步数。 |
 | `stride_steps` | 正整数 | 相邻目标间隔的采样步数。 |
-| `action_horizon` | 与模型一致的正整数 | LeRobot 由模型读取，可省略；OpenPI 显式指定。 |
+| `action_horizon` | 与模型一致的正整数 | 统一预测长度；LeRobot 映射为 chunk_size，OpenPI 映射为 model.action_horizon。 |
 
 第 i 个目标时刻为 `t + (target_offset_steps + i * stride_steps) / sample_hz`，i 从 0 开始。修改坐标、delta、method、参考或采样定义后应新建实验并重算统计量。配置不接受 spatial/temporal 别名。

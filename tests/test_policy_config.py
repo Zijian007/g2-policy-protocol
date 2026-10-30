@@ -60,7 +60,7 @@ def test_pose_method_and_scope_match_geometry_and_restore_wire_targets(method, s
     if arm != "both":
         inactive = slice(10, 20) if arm == "left" else slice(0, 10)
         np.testing.assert_array_equal(decoded[:, inactive], np.tile(observation["observation/pose"][inactive], (3, 1)))
-    public = public_settings({"schema_version": 6, "policy": policy})["policy"]
+    public = public_settings({"schema_version": 7, "policy": policy})["policy"]
     assert resolve_policy(public, horizon=3) == policy
 
 
