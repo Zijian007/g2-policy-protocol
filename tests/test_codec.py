@@ -2,7 +2,6 @@
 import msgpack
 import numpy as np
 import pytest
-
 from g2_policy_protocol import codec
 
 
@@ -136,7 +135,7 @@ def test_json_and_msgpack_feed_the_same_protocol_parser(encoding):
     second = wire.parse_request(codec.unpackb(codec.packb(request)), metadata=meta)
     np.testing.assert_array_equal(first['state'], second['state'])
     np.testing.assert_array_equal(first['prev_chunk_left_over'], second['prev_chunk_left_over'])
-    response = wire.build_response(request_id=42, actions=np.ones((2, 20)))
+    response = wire.build_response(request_id=42, actions=np.ones((2, 20)), metadata=meta)
     np.testing.assert_array_equal(wire.parse_response(codec.json_loads(codec.json_dumps(response)), request_id=42, metadata=meta),
                                   wire.parse_response(codec.unpackb(codec.packb(response)), request_id=42, metadata=meta))
 

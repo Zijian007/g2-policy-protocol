@@ -1,6 +1,8 @@
 # G2 训练 policy 字段速查
 
-LeRobot 和 OpenPI 使用同一套 `policy` 树；填好的 YAML 就是运行时契约，没有另一套编译字段。两边训练配置外层统一为 `schema_version: 7`，公共训练字段见[训练配置](training-config.md)。候选值与组合约束由 [schema.py](../src/g2_policy_tools/schema.py) 校验。框架怎么跑训练见各自 `scripts/g2/docs/training.md`。
+[文档入口](../README.md#文档导航) · [开发维护](development.md#职责划分) · [v3 协议](protocol.md)
+
+LeRobot 和 OpenPI 使用同一套 `policy` 树；填好的 YAML 就是运行时契约，没有另一套编译字段。共享包只定义 `policy.state/action/timing` 的数据语义；训练 YAML 外层、配置版本和 checkpoint 格式由各模型仓库维护，见 [OpenPI 训练配置](../../openpi/scripts/g2/docs/training.md)和 [LeRobot 训练配置](../../lerobot-finetune/scripts/g2/docs/training.md)。候选值与组合约束由 [data/policy.py](../src/g2_policy_protocol/data/policy.py) 校验。框架怎么跑训练见各自 `scripts/g2/docs/training.md`。
 
 ## 按问题配置
 
@@ -8,13 +10,13 @@ LeRobot 和 OpenPI 使用同一套 `policy` 树；填好的 YAML 就是运行时
 |---|---|---|
 | 输入什么？ | `data.cameras`、`policy.state`、数据集任务文本 | State 至少启用 joint/pose 一支，也可同时启用；固定读取实测数据。任务文本仍由各模型的数据流程处理。 |
 | 学习谁的动作？ | `policy.action.*.source` | `action` 取 action.* 指令列；`state` 取 state.* 实测列。Action 恰好启用一支。 |
-| 末端点和旋转？ | `*.pose.coordinates` | 训练 YAML 只选 `ee_frame`、`rotation`。磁盘 `pose_frame` / `action_parent_frame` 是采集事实，不是训练选项。 |
+| 坐标系、末端点和旋转？ | `*.pose.coordinates` | `parent_frame` 选 base_link / arm_base_link；`ee_frame` 选 flange / 标定 TCP；`rotation` 选旋转编码。磁盘坐标声明是采集事实。 |
 | 是否作差？ | `*.delta` | YAML 布尔值 `true` / `false`。false 为绝对值；true 必须再选 `method`。 |
 | 怎么作差？ | `*.method` | `component`：在编码后的父坐标系里减分量。`se3`：`inv(T_ref) @ T`，仅 pose。 |
 | 相对谁？ | `*.reference.source` | `state`（当前实测）或 `action`（当前指令）。delta=false 时为 null。 |
 | 整个序列如何用参考？ | `*.reference.scope` | `chunk`：全部相对同一参考。`step`：首个相对 source，后续相对前一个目标或历史帧。State 与 Action 都要填。 |
 
-未启用分支保留配置，但不启用其数值语义；未知字段始终报错。夹爪始终是绝对闭合比例（0 开、1 闭），不参与坐标差分或序列累积。`delta: true` 必须同时写 `method` 和 `reference`。采集时的 `pose_frame` 留在数据集元数据里；相对末端用 `method: se3`，不要在训练 YAML 写 `parent_frame`。
+未启用分支保留配置，但不启用其数值语义；未知字段始终报错。夹爪始终是绝对闭合比例（0 开、1 闭），不参与坐标差分或序列累积。`delta: true` 必须同时写 `method` 和 `reference`。`parent_frame` 决定位姿表达的父坐标系；相对末端用 `method: se3`。
 
 ## 一个完整例子
 
@@ -26,7 +28,7 @@ policy:
     joint: {enabled: false}
     pose:
       enabled: true
-      coordinates: {ee_frame: flange, rotation: rot6d}
+      coordinates: {parent_frame: base_link, ee_frame: flange, rotation: rot6d}
       delta: false
   action:
     joint: {enabled: false}
@@ -34,7 +36,7 @@ policy:
       enabled: true
       quantity: pose
       source: action
-      coordinates: {ee_frame: flange, rotation: rot6d}
+      coordinates: {parent_frame: base_link, ee_frame: flange, rotation: rot6d}
       delta: true
       method: component
       reference:
@@ -48,7 +50,7 @@ LeRobot 可以直接使用此片段。OpenPI 自定义 YAML 是对完整默认�
 
 ## 坐标表达与作差
 
-磁盘和 wire 仍是采集时的 `pose_frame`（默认 base_link）下 flange/rot6d。训练 YAML 的 `ee_frame` / `rotation` 只改变模型内部表示。作差在该分支自己的父坐标系里完成；State 与 Action 的父系可以不同。若采集 `pose_frame` 与 `action_parent_frame` 不同，对应分支必须提供 `base_to_parent`，缺变换则失败。
+磁盘和 wire 使用 `base_link` 下的 flange/rot6d 绝对位姿。入口要求所用 pose 列的 `pose_frame` / `action_parent_frame` 为 base_link；不匹配的数据须先按真实采集语义转换。训练 YAML 的坐标设置只改变模型内部表示。作差在该分支自己的父坐标系里完成；State 与 Action 的父系可以分别选择。
 
 | delta | method | 模型学习的非夹爪分量 |
 |---|---|---|
@@ -58,15 +60,22 @@ LeRobot 可以直接使用此片段。OpenPI 自定义 YAML 是对完整默认�
 
 例如参考绕 z 轴旋转 90°，目标沿父系 x 正方向移动 0.1 米：component 的位置差是 `[0.1,0,0]`；se3 的位置是 `[0,-0.1,0]`。
 
-日常训练配置只选择两个坐标字段：
+坐标配置：
 
 ```yaml
 coordinates:
+  parent_frame: arm_base_link # base_link（默认）| arm_base_link
   ee_frame: flange       # flange；命名 TCP 需要标定
   rotation: rot6d        # rot6d | quaternion（xyzw）| axis_angle
 ```
 
-自定义父坐标系或 TCP 仍须显式 `base_to_parent` / `flange_to_tcp`；不能只改名称就假定已经完成变换。两支同时使用动态父坐标系（`base_to_parent: observation`）时共用同一条 `observation/base_to_parent`。
+命名 TCP 仍须提供左右臂 `flange_to_tcp` 标定。父坐标系只接受 base_link / arm_base_link；训练 YAML 不接受 `base_to_parent`。
+
+选择 arm_base_link 时，数据集必须包含 `state.arm_base`（9 维 xyz + rot6d），表示 base_link 下的实测腰部末端位姿。采样器在当前观测时刻 t 插值平移和 SO(3) 旋转，然后计算 `T_armbase←base(t) = inverse(T_base←armbase(t))`。整个历史输入、预测 chunk 和差分参考共用这一变换，不读取未来腰部状态。episode 起点之前仍重复首帧。
+
+部署握手按需声明 `context.base_to_parent`，含义固定为 `T_armbase←base(t)`。wholebody 使用当前实测腰部关节和缓存的运动链计算它；服务端用同一次请求的变换编码输入、RTC 前缀并将输出还原到 base_link。动作执行期间不持续跟随腰部变化。base_link 模型不读取腰部列、不计算腰部 FK。
+
+父坐标系保存在 checkpoint 配置中，并参与归一化缓存和续训语义检查。切换坐标系须新建实验并重算统计量；修改旧 checkpoint 的坐标名称不会转换模型权重。
 
 每臂位姿维度是 xyz3 + 旋转编码 + 夹爪1：rot6d=10、quaternion=8、axis_angle=7；关节位置是 7 个关节 + 夹爪，共 8 维。
 

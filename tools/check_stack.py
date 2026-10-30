@@ -18,8 +18,8 @@ from types import SimpleNamespace
 
 async def serve_worker(args):
     import numpy as np
-    from g2_policy_tools.geometry import ActionCodec
-    from g2_policy_tools.schema import resolve_policy
+    from g2_policy_protocol.data.encoding import ActionCodec
+    from g2_policy_protocol.data.policy import resolve_policy
     from websockets.asyncio.server import serve
 
     root = args.stack_root / args.backend
@@ -113,7 +113,6 @@ async def serve_worker(args):
 
 def check_stack(args):
     import numpy as np
-    from g2_policy_protocol import protocol
 
     sys.path.insert(0, str(args.stack_root))
     from wholebody.external_services.policy.runtime.execution import execution_plan
@@ -152,10 +151,6 @@ def check_stack(args):
             "branch": branch,
             "source_sha256": digest.hexdigest(),
         }
-    if manifest["wholebody"]["branch"] != "gdk_3.2.3_collect_session_with_umi_dev":
-        raise ValueError(
-            "Stack check requires the wholebody collect_session_with_umi_dev branch"
-        )
     results = []
     for backend, quantity, history in itertools.product(
         ("lerobot-finetune", "openpi"),
@@ -195,7 +190,7 @@ def check_stack(args):
                     joint = np.zeros(16, np.float32)
                     image = np.full((8, 8, 3), 128, np.uint8)
                     context = {}
-                    keys = protocol.observation_contract(metadata)["context_keys"]
+                    keys = metadata["observation_spec"]["context_keys"]
                     if "start_pose" in keys:
                         context["start_pose"] = pose
                     if history > 1:
@@ -207,6 +202,7 @@ def check_stack(args):
                             "head_color": np.full((2, *size, 3), 128, np.uint8)
                         }
                     request = {
+                        "task": "stack validation",
                         "pose": pose,
                         "joint_state": joint,
                         "images": {"head_color": image},

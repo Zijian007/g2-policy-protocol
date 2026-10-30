@@ -9,43 +9,9 @@ Measured vectors are ``state.joint`` / ``state.pose``. Commands are
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from dataclasses import field as dc_field
 
 SIDES: tuple[str, ...] = ("left", "right")
-
-
-def _arm_joint_names(side: str) -> tuple[str, ...]:
-    return (*(f"{side}_joint_{i}" for i in range(1, 8)), f"{side}_gripper")
-
-
-def _arm_pose_names(side: str) -> tuple[str, ...]:
-    return (
-        f"{side}_x",
-        f"{side}_y",
-        f"{side}_z",
-        *(f"{side}_rot6d_{i}" for i in range(6)),
-        f"{side}_gripper",
-    )
-
-
-def _concat_sides(
-    per_side: Callable[[str], Sequence[str]],
-    sides: Sequence[str] = SIDES,
-) -> tuple[str, ...]:
-    out: list[str] = []
-    for side in sides:
-        out.extend(per_side(side))
-    return tuple(out)
-
-
-def _gripper_indices(names: Sequence[str]) -> tuple[int, ...]:
-    return tuple(i for i, name in enumerate(names) if name.endswith("_gripper"))
-
-
-_JOINT_NAMES = _concat_sides(_arm_joint_names)
-_POSE_NAMES = _concat_sides(_arm_pose_names)
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,58 +23,21 @@ class VectorLayout:
 
     names: tuple[str, ...]
     per_side_dim: int
+    gripper_indices: tuple[int, ...]
     sides: tuple[str, ...] = SIDES
-    gripper_indices: tuple[int, ...] = dc_field(default_factory=tuple)
-
-    def __post_init__(self) -> None:
-        expected = self.per_side_dim * len(self.sides)
-        if len(self.names) != expected:
-            raise ValueError(
-                f"layout has {len(self.names)} names, expected {expected} "
-                f"({self.per_side_dim} per side x {len(self.sides)} sides)"
-            )
 
     @property
     def dim(self) -> int:
         return len(self.names)
 
-    def side_slice(self, side: str) -> slice:
-        if side not in self.sides:
-            raise KeyError(f"unknown side {side!r}; expected one of {self.sides}")
-        start = self.sides.index(side) * self.per_side_dim
-        return slice(start, start + self.per_side_dim)
-
     def describe(self) -> dict:
-        payload: dict = {
+        return {
             "dim": self.dim,
             "names": list(self.names),
             "sides": list(self.sides),
             "per_side_dim": self.per_side_dim,
+            "gripper_index": list(self.gripper_indices),
         }
-        if self.gripper_indices:
-            payload["gripper_index"] = list(self.gripper_indices)
-        return payload
-
-    def delta_mask(self) -> tuple[bool, ...]:
-        """True where that action dim is a delta. Gripper indices stay absolute."""
-        grips = set(self.gripper_indices)
-        return tuple(index not in grips for index in range(self.dim))
-
-
-def _default_joint_layout() -> VectorLayout:
-    return VectorLayout(
-        names=_JOINT_NAMES,
-        per_side_dim=8,
-        gripper_indices=_gripper_indices(_JOINT_NAMES),
-    )
-
-
-def _default_pose_layout() -> VectorLayout:
-    return VectorLayout(
-        names=_POSE_NAMES,
-        per_side_dim=10,
-        gripper_indices=_gripper_indices(_POSE_NAMES),
-    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -167,10 +96,20 @@ class G2LerobotContract:
     schema_id: str = "g2_lerobot_keys_v3"
     rotation: str = "rot6d"
 
-    columns: DiskColumnKeys = dc_field(default_factory=DiskColumnKeys)
-    joint: VectorLayout = dc_field(default_factory=_default_joint_layout)
-    pose: VectorLayout = dc_field(default_factory=_default_pose_layout)
-    cameras: CameraKeys = dc_field(default_factory=CameraKeys)
+    columns: DiskColumnKeys = DiskColumnKeys()
+    joint: VectorLayout = VectorLayout(
+        names=tuple(f"{side}_{name}" for side in SIDES for name in (*(f"joint_{i}" for i in range(1, 8)), "gripper")),
+        per_side_dim=8,
+        gripper_indices=(7, 15),
+    )
+    pose: VectorLayout = VectorLayout(
+        names=tuple(
+            f"{side}_{name}" for side in SIDES for name in ("x", "y", "z", *(f"rot6d_{i}" for i in range(6)), "gripper")
+        ),
+        per_side_dim=10,
+        gripper_indices=(9, 19),
+    )
+    cameras: CameraKeys = CameraKeys()
 
 
 G2 = G2LerobotContract()

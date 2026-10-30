@@ -3,14 +3,13 @@ import copy
 import numpy as np
 import pytest
 from g2_policy_protocol import protocol
-from g2_policy_tools.capabilities import policy_capabilities
-from g2_policy_tools.data_contract import validate_dataset_contract
-from g2_policy_tools.schema import resolve_policy
+from g2_policy_protocol.data.dataset import validate_dataset_contract
+from g2_policy_protocol.data.policy import policy_capabilities, resolve_policy
 
 
 def test_full_chunk_profile_rejects_short_response_but_accepts_short_rtc_prefix():
     metadata = protocol.build_metadata(
-        version=3,
+
         policy_hz=30,
         action_horizon=4,
         required_cameras=[],
@@ -101,3 +100,18 @@ def test_measured_supervision_selects_state_without_relabelling_disk_actions():
         (),
     )
     assert features == original
+
+
+@pytest.mark.parametrize("group", ["state", "action"])
+def test_arm_base_requires_recorded_nine_dimensional_pose_and_wire_context(group):
+    policy = resolve_policy({group: {"pose": {"coordinates": {"parent_frame": "arm_base_link"}}}}, horizon=4)
+    features = {"state.pose": {"shape": [20]}, "action.pose": {"shape": [20]}}
+    with pytest.raises(ValueError, match="state.arm_base"):
+        validate_dataset_contract(features, {}, policy, ())
+    features["state.arm_base"] = {"shape": [10]}
+    with pytest.raises(ValueError, match="shape \\[9\\]"):
+        validate_dataset_contract(features, {}, policy, ())
+    features["state.arm_base"] = {"shape": [9]}
+    validate_dataset_contract(features, {}, policy, ())
+    metadata = policy_capabilities(policy, (), prompt=False, reset=True)
+    assert metadata["observation_spec"]["context_keys"] == ["base_to_parent"]

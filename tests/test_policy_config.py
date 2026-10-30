@@ -6,10 +6,8 @@ import numpy as np
 import pytest
 from scipy.spatial.transform import Rotation
 
-from g2_policy_tools.capabilities import policy_capabilities
-from g2_policy_tools.geometry import ActionCodec, matrix_pose
-from g2_policy_tools.schema import public_settings, resolve_policy
-from g2_policy_tools.state import encode_state
+from g2_policy_protocol.data.encoding import ActionCodec, encode_state, matrix_pose
+from g2_policy_protocol.data.policy import policy_capabilities, resolve_policy
 
 
 def transform(position, angles):
@@ -60,8 +58,7 @@ def test_pose_method_and_scope_match_geometry_and_restore_wire_targets(method, s
     if arm != "both":
         inactive = slice(10, 20) if arm == "left" else slice(0, 10)
         np.testing.assert_array_equal(decoded[:, inactive], np.tile(observation["observation/pose"][inactive], (3, 1)))
-    public = public_settings({"schema_version": 7, "policy": policy})["policy"]
-    assert resolve_policy(public, horizon=3) == policy
+    assert resolve_policy(policy, horizon=3) == policy
 
 
 @pytest.mark.parametrize("method", ["component", "se3"])
@@ -101,7 +98,7 @@ def test_state_history_uses_the_configured_method_and_chunk_reference(method, ro
         ({"delta": "true"}, "delta must be a YAML boolean"),
         ({"delta": 1}, "delta must be a YAML boolean"),
         ({"delta": True}, "method must be"),
-        ({"coordinates": {"parent_frame": "reference"}}, "Unknown YAML field"),
+        ({"coordinates": {"parent_frame": "reference"}}, "parent_frame must be one of"),
         ({"delta": False, "reference": {"source": "state", "scope": "chunk"}}, "reference requires"),
         ({"delta": True, "method": "se3", "reference": {"source": "object", "scope": "chunk"}}, "must be one of"),
         (
@@ -134,8 +131,8 @@ def test_state_relative_to_itself_requires_history():
         )
 
 
-def test_parent_frame_is_not_a_training_field():
-    with pytest.raises(ValueError, match="Unknown YAML field"):
+def test_parent_frame_rejects_unsupported_links():
+    with pytest.raises(ValueError, match="parent_frame must be one of"):
         resolve_policy({"action": {"pose": {"coordinates": {"parent_frame": "camera"}}}}, horizon=3)
 
 
@@ -217,3 +214,43 @@ def test_codec_rejects_removed_twist_in_saved_numerical_contract():
     policy["action"]["pose"]["quantity"] = "twist"
     with pytest.raises(ValueError, match='Unsupported G2 control quantity'):
         ActionCodec(policy).encode(np.zeros((3, 14)), {})
+
+
+@pytest.mark.parametrize("arm", ["both", "left", "right"])
+@pytest.mark.parametrize("invalid", [float("nan"), float("inf")])
+def test_action_boundaries_reject_nonfinite_wire_and_padded_model_values(arm, invalid):
+    codec = ActionCodec(resolve_policy({}, horizon=3), arm)
+    wire = np.zeros((3, 20), np.float32)
+    wire[0, -1] = invalid
+    with pytest.raises(ValueError, match="finite"):
+        codec.encode(wire, {})
+    model = np.zeros((3, 32), np.float32)
+    model[0, -1] = invalid
+    with pytest.raises(ValueError, match="finite"):
+        codec.decode(model, {})
+
+
+@pytest.mark.parametrize("kind,width", [("pose", 20), ("joint", 16)])
+def test_state_boundary_rejects_nonfinite_history_before_conversion(kind, width):
+    policy = resolve_policy({"state": {
+        "pose": {"enabled": kind == "pose"}, "joint": {"enabled": kind == "joint"},
+    }}, horizon=3)
+    values = np.zeros(width, np.float32)
+    values[-1] = np.nan
+    with pytest.raises(ValueError, match="finite"):
+        encode_state(policy, {f"observation/{kind}": values}, "left")
+
+
+@pytest.mark.parametrize("arm", ["left", "right"])
+@pytest.mark.parametrize("quantity", ["velocity", "torque"])
+def test_single_arm_nonposition_actions_keep_other_arm_neutral_without_feedback(arm, quantity):
+    policy = resolve_policy({"action": {
+        "pose": {"enabled": False}, "joint": {"enabled": True, "quantity": quantity},
+    }}, horizon=3)
+    codec = ActionCodec(policy, arm)
+    targets = np.arange(48, dtype=np.float32).reshape(3, 16)
+    restored = codec.decode(codec.encode(targets, {}), {})
+    selected = slice(0, 8) if arm == "left" else slice(8, 16)
+    inactive = slice(8, 16) if arm == "left" else slice(0, 8)
+    np.testing.assert_array_equal(restored[:, selected], targets[:, selected])
+    np.testing.assert_array_equal(restored[:, inactive], 0)

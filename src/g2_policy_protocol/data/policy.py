@@ -1,9 +1,9 @@
-"""Shared G2 state/action schema: filled public YAML is the runtime contract."""
+"""Shared G2 state/action semantics, configuration and wire capability derivation."""
 
 import copy
 import math
 
-from .validation import validate_rigid_transform
+from g2_policy_protocol.validation import validate_rigid_transform
 
 SOURCES = ("state", "action")
 METHODS = ("component", "se3")
@@ -12,9 +12,9 @@ QUANTITIES = {
     "pose": {"pose": "pose_target"},
 }
 COORDINATES = {
+    "parent_frame": "base_link",
     "ee_frame": "flange",
     "rotation": "rot6d",
-    "base_to_parent": None,
     "flange_to_tcp": None,
 }
 
@@ -67,18 +67,17 @@ def resolve_policy(raw, *, horizon, sample_hz=30.0):
         "stride_steps": 1,
     }
     merge(policy, raw, "policy")
-    return compile_policy(policy)
+    validate_policy(policy)
+    return policy
 
 
 def validate_coordinates(pose, path="coordinates"):
+    _choice(pose["parent_frame"], ("base_link", "arm_base_link"), f"{path}.parent_frame")
     for key in ("ee_frame", "rotation"):
         if not isinstance(pose[key], str) or not pose[key].strip():
             raise ValueError(f"{path}.{key} must be a nonempty string")
     if pose["rotation"] not in ("rot6d", "quaternion", "axis_angle"):
         raise ValueError(f"{path}.rotation must be rot6d, quaternion or axis_angle")
-    parent = pose["base_to_parent"]
-    if parent is not None and not (isinstance(parent, str) and parent == "observation"):
-        validate_rigid_transform(parent, f"{path}.base_to_parent")
     tcp = pose["flange_to_tcp"]
     if tcp is not None:
         if not isinstance(tcp, dict) or tcp.keys() != {"left", "right"}:
@@ -147,22 +146,6 @@ def merge(base, override, path=""):
                 base["method"] = None
 
 
-def compile_policy(policy):
-    if not isinstance(policy, dict) or policy.keys() != {"state", "action", "timing"}:
-        raise ValueError("policy fields must be state, action and timing")
-    for group in ("state", "action"):
-        spec = policy.get(group, {}).get("pose")
-        if isinstance(spec, dict) and isinstance(spec.get("coordinates"), dict):
-            for key, default in COORDINATES.items():
-                spec["coordinates"].setdefault(key, copy.deepcopy(default))
-    validate_policy(policy)
-    return policy
-
-
-def public_settings(settings):
-    return copy.deepcopy(settings)
-
-
 def _choice(value, choices, path):
     if not isinstance(value, str) or value not in choices:
         raise ValueError(f"{path} must be one of {tuple(choices)}")
@@ -204,3 +187,46 @@ def _validate_encoding(spec, group, kind):
         raise ValueError(f"{path}.method must be component or se3")
     _choice(reference["source"], SOURCES, f"{path}.reference.source")
     _choice(reference["scope"], ("chunk", "step"), f"{path}.reference.scope")
+
+
+def policy_capabilities(policy, cameras, *, prompt, reset):
+    from g2_policy_protocol import protocol
+
+    state, action, timing = policy["state"], policy["action"], policy["timing"]
+    pose = state["pose"]["enabled"] or action["pose"]["enabled"]
+    joint = state["joint"]["enabled"] or action["joint"]["enabled"]
+    context = []
+    for kind in ("pose", "joint"):
+        if any(
+            spec["enabled"] and spec["delta"] and spec["reference"]["source"] == "action"
+            for spec in (state[kind], action[kind])
+        ):
+            context.append(f"command_{kind}")
+    if any(
+        spec["enabled"] and spec["coordinates"]["parent_frame"] == "arm_base_link"
+        for spec in (state["pose"], action["pose"])
+    ):
+        context.append("base_to_parent")
+    if timing["history_steps"] > 1:
+        context.extend((["pose_history"] if pose else []) + (["joint_history"] if joint else []))
+        if cameras:
+            context.append("image_history")
+    dt = timing["stride_steps"] / timing["sample_hz"]
+    return {
+        "policy_hz": 1 / dt,
+        "requires_joint_state": joint,
+        "reset_supported": reset,
+        "action_spec": protocol.build_action_spec(control_quantity(policy)),
+        "observation_spec": {
+            "pose": pose,
+            "joint": joint,
+            "prompt": prompt,
+            "history_steps": timing["history_steps"],
+            "history_hz": timing["sample_hz"],
+            "context_keys": list(dict.fromkeys(context)),
+        },
+        "timing": {
+            "action_dt": dt,
+            "first_target_offset_s": timing["target_offset_steps"] / timing["sample_hz"],
+        },
+    }

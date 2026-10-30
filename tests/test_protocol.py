@@ -16,8 +16,8 @@ QUANTITIES = ('pose_target', 'joint_position', 'joint_velocity', 'joint_torque')
 
 
 def metadata(quantity='pose_target', **kwargs):
-    return p.build_metadata(version=3, policy_hz=15, required_cameras=[],
-        action_spec=p.v3.action_spec(quantity),
+    return p.build_metadata(policy_hz=15, required_cameras=[],
+        action_spec=p.build_action_spec(quantity),
         observation_spec=dict(pose=False, joint=False, prompt=False, history_steps=1,
                               history_hz=30, context_keys=[]), **kwargs)
 
@@ -39,8 +39,8 @@ def test_all_typed_actions_and_optional_observations_round_trip(quantity, encodi
     with pytest.raises(ValueError):
         p.parse_response({**response, 'actions': np.ones((4, dim + 1))}, request_id=7, metadata=meta)
     root = Path(__file__).resolve().parents[1]
-    schema = json.loads((root / 'src/g2_policy_protocol/g2.v3.schema.json').read_text())
-    for message in (meta, request, response, p.build_reset(request_id=8, metadata=meta), p.v3.reset_message(8, ack=True)):
+    schema = json.loads((root / 'src/g2_policy_protocol/g2.schema.json').read_text())
+    for message in (meta, request, response, p.build_reset(request_id=8, metadata=meta), p.build_reset_ack(request_id=8)):
         jsonschema.validate(json.loads(codec.json_dumps(message)), schema)
 
 
@@ -76,16 +76,16 @@ def test_history_refs_timestamps_and_reset_validation():
         p.parse_request({k: v for k, v in request.items() if k != 'observation_time_ns'}, metadata=meta)
     with pytest.raises(ValueError, match='reset'):
         p.build_reset(request_id=3, metadata=meta)
-    p.parse_reset_ack(p.v3.reset_message(3, ack=True), request_id=3)
+    p.parse_reset_ack(p.build_reset_ack(request_id=3), request_id=3)
     with pytest.raises(ValueError):
-        p.parse_reset_ack(p.v3.reset_message(3, ack=True), request_id=4)
+        p.parse_reset_ack(p.build_reset_ack(request_id=3), request_id=4)
 
 
-def test_generators_current_and_v3_changes_drive_validation():
+def test_schema_changes_drive_validation():
     root = Path(__file__).resolve().parents[1]
     render = runpy.run_path(str(root / 'tools/generate_protocol.py'))['render']
-    schema = json.loads((root / 'src/g2_policy_protocol/g2.v3.schema.json').read_text())
-    assert render(schema) == (root / 'src/g2_policy_protocol/_generated_v3.py').read_text()
+    schema = json.loads((root / 'src/g2_policy_protocol/g2.schema.json').read_text())
+    assert render(schema) == (root / 'src/g2_policy_protocol/_generated.py').read_text()
     changed = copy.deepcopy(schema)
     changed['$defs']['metadata']['properties']['action_spec']['properties']['dim']['minimum'] = 100
     ns = {'__package__': 'g2_policy_protocol'}
@@ -102,23 +102,42 @@ class Block(importlib.abc.MetaPathFinder):
         if fullname.split('.')[0] in ('openpi', 'torch', 'jax', 'wholebody', 'lerobot'):
             raise AssertionError(fullname)
 sys.meta_path.insert(0, Block())
-from g2_policy_tools import geometry, dataset, contract, validation
-from g2_policy_protocol import protocol
-assert geometry.ActionCodec and dataset.G2Dataset
+from g2_policy_protocol.data import encoding, dataset, contract
+from g2_policy_protocol import protocol, validation
+assert encoding.ActionCodec and dataset.TemporalDataset
 assert contract.G2.pose.names == protocol.POSE_FIELDS
 assert contract.G2.joint.names == protocol.JOINT_FIELDS
 '''], capture_output=True, text=True, timeout=10)
     assert result.returncode == 0, result.stderr
 
 
+def test_policy_configuration_stays_independent_of_numeric_and_transport_dependencies():
+    result = subprocess.run([sys.executable, '-c', '''
+import importlib.abc, sys
+class Block(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname.split('.')[0] in ('numpy', 'scipy', 'PIL', 'websockets', 'msgpack', 'torch', 'jax'):
+            raise AssertionError(fullname)
+sys.meta_path.insert(0, Block())
+from g2_policy_protocol.data.policy import resolve_policy
+assert resolve_policy({}, horizon=4)['timing']['action_horizon'] == 4
+'''], capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stderr
+
+
+def test_unknown_response_mode_is_rejected_during_handshake():
+    with pytest.raises(ValueError, match="response_mode"):
+        p.build_metadata(policy_hz=30, extensions={"response_mode": "full_chunck"})
+
+
 def test_removed_twist_is_rejected_by_action_spec_metadata_and_json_schema():
     with pytest.raises(ValueError, match='unsupported control_quantity'):
-        p.v3.action_spec('eef_twist')
+        p.build_action_spec('eef_twist')
     meta = metadata()
     meta['action_spec']['control_quantity'] = 'eef_twist'
     with pytest.raises(ValueError, match='unsupported value'):
         p.validate_metadata(meta)
     root = Path(__file__).resolve().parents[1]
-    schema = json.loads((root / 'src/g2_policy_protocol/g2.v3.schema.json').read_text())
+    schema = json.loads((root / 'src/g2_policy_protocol/g2.schema.json').read_text())
     with pytest.raises(jsonschema.ValidationError):
         jsonschema.validate(json.loads(codec.json_dumps(meta)), schema)

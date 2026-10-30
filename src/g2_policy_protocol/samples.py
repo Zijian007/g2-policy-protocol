@@ -77,7 +77,7 @@ def prepare_images(sample, metadata):
     """Prepare only required cameras. Pillow is an optional integration-tool dependency."""
     from PIL import Image
 
-    from .image_tools import encode_jpeg
+    from .images import encode_jpeg
 
     result = {}
     bilinear = Image.Resampling.BILINEAR if hasattr(Image, "Resampling") else Image.BILINEAR
@@ -104,15 +104,24 @@ def prepare_images(sample, metadata):
 
 def synthetic_context(sample, metadata):
     """Repeat fixture values for protocol diagnostics only; never a robot history provider."""
-    spec = p.observation_contract(metadata)
-    pose, joint = sample['state'], sample.get('joint_state', np.zeros(16, np.float32))
-    length = spec['history_steps']
-    values = dict(command_pose=pose, command_joint=joint, previous_command_pose=pose, object_pose=pose,
-                  start_pose=pose, start_joint=joint, object_joint=joint, base_to_parent=np.eye(4),
-                  pose_history=np.tile(pose, (length, 1)), joint_history=np.tile(joint, (length, 1)))
-    raw = prepare_images(sample, {**metadata, 'image_encoding': 'raw'})
-    values['image_history'] = {key: np.repeat(value[None], length, axis=0) for key, value in raw.items()}
-    return {key: values[key] for key in spec['context_keys']}
+    spec = metadata["observation_spec"]
+    result = {}
+    for key in spec["context_keys"]:
+        if key == "image_history":
+            raw = prepare_images(sample, {**metadata, "image_encoding": "raw"})
+            result[key] = {
+                camera: np.repeat(image[None], spec["history_steps"], axis=0)
+                for camera, image in raw.items()
+            }
+        elif key == "base_to_parent":
+            result[key] = np.eye(4)
+        else:
+            if "pose" in key:
+                value = sample["state"]
+            else:
+                value = sample["joint_state"] if "joint_state" in sample else np.zeros(p.JOINT_DIM, np.float32)
+            result[key] = np.tile(value, (spec["history_steps"], 1)) if key.endswith("_history") else value
+    return result
 
 
 def main():

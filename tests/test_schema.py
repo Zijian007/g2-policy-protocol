@@ -1,13 +1,13 @@
 import json
+import runpy
 from importlib.resources import files
 from pathlib import Path
-import runpy
 
 import jsonschema
 import numpy as np
 import pytest
-
-from g2_policy_protocol import codec, protocol as p
+from g2_policy_protocol import codec
+from g2_policy_protocol import protocol as p
 
 
 def metadata(**kwargs):
@@ -38,8 +38,8 @@ def test_every_message_agrees_with_json_schema(encoding, image_encoding):
     jsonschema.Draft202012Validator.check_schema(schema)
     validator = jsonschema.Draft202012Validator(schema)
     meta = metadata(image_encoding=image_encoding, rtc_supported=True)
-    messages = [meta, request(meta, rtc_enabled=True, inference_delay=2, prev_chunk_left_over=np.zeros((1, 20))),
-                p.build_response(request_id=42, actions=np.ones((2, 20))),
+    messages = [meta, request(meta, rtc_enabled=True, inference_delay=1, prev_chunk_left_over=np.zeros((1, 20))),
+                p.build_response(request_id=42, actions=np.ones((2, 20)), metadata=meta),
                 p.build_error(request_id=42, message='model failed')]
     for message in messages:
         validator.validate(json.loads(codec.json_dumps(message)))
@@ -55,7 +55,8 @@ def test_every_message_agrees_with_json_schema(encoding, image_encoding):
                 p.parse_response(decoded, request_id=42, metadata=meta)
 
 
-@pytest.mark.parametrize('changes', [{'protocol': 'g2.policy.v1'}, {'policy_hz': 0}, {'policy_hz': float('nan')},
+@pytest.mark.parametrize('changes', [{'protocol': 'g2.policy.v1'}, {'protocol': 'g2.policy.v2'},
+    {'policy_hz': 0}, {'policy_hz': float('nan')},
     {'required_cameras': ['unknown']}, {'image_encoding': 'png'}, {'image_sizes': {'head_color': [0, 1]}},
     {'execution_steps': 51}, {'arm': 'bad'}, {'rtc_supported': 1}])
 def test_incompatible_capabilities_are_rejected(changes):
@@ -85,17 +86,18 @@ def test_single_arm_required_cameras_and_optional_joint_state():
 
 
 def test_request_ids_and_model_errors_cannot_be_confused():
-    result = p.build_response(request_id=4, actions=np.zeros((1, 20)))
+    meta = metadata()
+    result = p.build_response(request_id=4, actions=np.zeros((1, 20)), metadata=meta)
     with pytest.raises(ValueError, match='request_id'):
-        p.parse_response(result, request_id=5)
+        p.parse_response(result, request_id=5, metadata=meta)
     with pytest.raises(RuntimeError, match='broken'):
-        p.parse_response(p.build_error(request_id=5, message='broken'), request_id=5)
+        p.parse_response(p.build_error(request_id=5, message='broken'), request_id=5, metadata=meta)
 
 
 @pytest.mark.parametrize('actions', [np.zeros(20), np.zeros((0, 20)), np.zeros((2, 10)), np.zeros((2, 32)), np.full((1, 20), np.inf)])
 def test_model_adapters_must_return_finite_absolute_pose20(actions):
     with pytest.raises(ValueError):
-        p.build_response(request_id=42, actions=actions)
+        p.build_response(request_id=42, actions=actions, metadata=metadata())
 
 
 def test_encoding_is_fixed_for_the_entire_connection():
@@ -130,13 +132,13 @@ def test_metadata_numpy_scalars_still_emit_schema_valid_json():
     {'policy_timing': {'infer_ms': float('nan')}},
 ])
 def test_response_builder_keeps_validation(kwargs):
-    args = dict(request_id=42, actions=np.zeros((2, 20)))
+    args = dict(request_id=42, actions=np.zeros((2, 20)), metadata=metadata())
     with pytest.raises(ValueError):
         p.build_response(**{**args, **kwargs})
 
 
 def test_response_builder_normalizes_arrays_and_numpy_scalars():
-    response = p.build_response(request_id=np.int64(42), actions=[[1] * 20],
+    response = p.build_response(request_id=np.int64(42), actions=[[1] * 20], metadata=metadata(),
                                 server_timing={'infer_ms': np.float32(2)})
     assert type(response['request_id']) is int
     assert response['actions'].dtype == np.float32
@@ -148,7 +150,7 @@ def test_response_builder_normalizes_arrays_and_numpy_scalars():
     'schema_version', 'state_layout', 'action_layout', 'frame', 'rotation',
     'action_semantics', 'encoding', 'policy_type',
 ])
-def test_redundant_metadata_fields_are_not_part_of_v2(field):
+def test_redundant_metadata_fields_are_not_part_of_wire_contract(field):
     meta = metadata()
     assert field not in meta
     schema = json.loads(files('g2_policy_protocol').joinpath('g2.schema.json').read_text())
@@ -160,7 +162,7 @@ def test_redundant_metadata_fields_are_not_part_of_v2(field):
 
 
 def test_fixed_semantics_are_generated_from_schema_instead_of_sent():
-    assert p.PROTOCOL == 'g2.policy.v2'
+    assert p.PROTOCOL == 'g2.policy.v3'
     assert (p.FRAME, p.ROTATION, p.ACTION_SEMANTICS) == ('base_link', 'rot6d', 'absolute')
     assert p.ENCODING_VALUES == ('msgpack', 'json')
     p.validate_metadata(metadata(extensions={'policy_type': 'my_custom_model'}))

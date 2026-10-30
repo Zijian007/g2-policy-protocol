@@ -1,13 +1,13 @@
 """Schema/Python agreement and proof that changing the source changes checks."""
 import json
-from pathlib import Path
 import runpy
+from pathlib import Path
 
 import jsonschema
 import numpy as np
 import pytest
-
-from g2_policy_protocol import codec, protocol as p
+from g2_policy_protocol import codec
+from g2_policy_protocol import protocol as p
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -23,13 +23,13 @@ def messages():
         'metadata': meta,
         'obs': p.build_request(request_id=1, prompt='demo', state=np.zeros(20),
                                images=dict.fromkeys(p.CAMERA_IDS, np.zeros((2, 3, 3), np.uint8)), metadata=meta),
-        'action': p.build_response(request_id=1, actions=np.zeros((2, 20))),
+        'action': p.build_response(request_id=1, actions=np.zeros((2, 20)), metadata=meta),
         'error': p.build_error(request_id=1, message='failed'),
     }
 
 
 @pytest.mark.parametrize('kind, changes', [
-    ('metadata', {'required_cameras': []}),
+    ('metadata', {'required_cameras': ['unknown']}),
     ('metadata', {'required_cameras': ['head_color', 'head_color']}),
     ('metadata', {'image_sizes': {'unknown': [2, 3]}}),
     ('metadata', {'image_sizes': {'head_color': [2]}}),
@@ -38,7 +38,6 @@ def messages():
     ('metadata', {'extensions': []}),
     ('obs', {'request_id': True}),
     ('obs', {'request_id': -1}),
-    ('obs', {'prompt': ''}),
     ('obs', {'prompt': 1}),
     ('obs', {'rtc_enabled': 1}),
     ('obs', {'observation_time_ns': -1}),
@@ -64,7 +63,7 @@ def test_static_rejections_agree_with_schema(schema, kind, changes):
         elif kind == 'obs':
             p.parse_request(payload, metadata=base['metadata'])
         else:
-            p.parse_response(payload, request_id=1)
+            p.parse_response(payload, request_id=1, metadata=base['metadata'])
 
 
 def generate(schema):

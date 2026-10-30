@@ -4,14 +4,21 @@ JPEG is transported as opaque bytes. Encoding/decoding and resizing belong to
 the caller, before build_request / after parse_request respectively.
 """
 import base64
-from collections.abc import Mapping
 import functools
 import json
 import math
+from collections.abc import Mapping
 
 import msgpack
 import numpy as np
-from ._generated import ENCODING_VALUES, IMAGE_DTYPE, IMAGE_NDIM, IMAGE_CHANNELS, IMAGE_MIN_HW
+
+from ._generated import (
+    ENCODING_VALUES,
+    IMAGE_CHANNELS,
+    IMAGE_DTYPE,
+    IMAGE_MIN_HW,
+    IMAGE_NDIM,
+)
 
 _RAW_IMAGE_DTYPE = np.dtype(IMAGE_DTYPE)
 

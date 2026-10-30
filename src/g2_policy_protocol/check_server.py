@@ -2,14 +2,15 @@
 
 import argparse
 import json
-from pathlib import Path
 import time
+from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import numpy as np
 
-from . import codec, protocol as p
-from .samples import load_sample, prepare_images, synthetic_sample, synthetic_context
+from . import codec
+from . import protocol as p
+from .samples import load_sample, prepare_images, synthetic_context, synthetic_sample
 
 
 def connection_uri(uri, encoding):
@@ -33,6 +34,10 @@ def check_connection(uri, encoding, sample, *, requests=2, timeout=30,
             p.validate_metadata(metadata, policy_hz=policy_hz, require_rtc=rtc)
             result["metadata"] = metadata
             images = prepare_images(sample, metadata)
+            context = (
+                synthetic_context(sample, metadata)
+                if sample["provenance"].startswith("synthetic;") else None
+            )
             if metadata["requires_joint_state"] and "joint_state" not in sample:
                 raise ValueError("server requires joint_state but sample does not contain it")
             previous = None
@@ -43,8 +48,8 @@ def check_connection(uri, encoding, sample, *, requests=2, timeout=30,
                     joint_state=sample.get("joint_state") if metadata["requires_joint_state"] else None,
                     rtc_enabled=rtc, inference_delay=0,
                     prev_chunk_left_over=previous if rtc else None,
-                    observation_time_ns=time.monotonic_ns() if p.is_v3(metadata) else None,
-                    context=synthetic_context(sample, metadata) if p.is_v3(metadata) and sample["provenance"].startswith("synthetic;") else None,
+                    observation_time_ns=time.monotonic_ns(),
+                    context=context,
                 )
                 start = time.perf_counter()
                 ws.send(codec.dumps(request, encoding=encoding))
@@ -52,7 +57,7 @@ def check_connection(uri, encoding, sample, *, requests=2, timeout=30,
                 actions = p.parse_response(response, request_id=request_id, metadata=metadata)
                 elapsed_ms = (time.perf_counter() - start) * 1000
                 if semantic_checks:
-                    check_action_semantics(actions, p.action_contract(metadata)["control_quantity"])
+                    check_action_semantics(actions, metadata["action_spec"]["control_quantity"])
                 if actions.shape[0] != metadata["action_horizon"]:
                     warning = "returned T differs from action_horizon; confirm execution_steps and scheduling"
                     if warning not in result["warnings"]:

@@ -1,1 +1,1 @@
-"""G2 policy messages: protocol for contracts, codec for JSON/MessagePack."""
+"""G2 policy communication and shared robot data semantics (see the data subpackage)."""
