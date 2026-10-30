@@ -4,6 +4,33 @@
 
 LeRobot 和 OpenPI 使用同一套 `policy` 树；填好的 YAML 就是运行时契约，没有另一套编译字段。共享包只定义 `policy.state/action/timing` 的数据语义；训练 YAML 外层、配置版本和 checkpoint 格式由各模型仓库维护，见 [OpenPI 训练配置](../../openpi/scripts/g2/docs/training.md)和 [LeRobot 训练配置](../../lerobot-finetune/scripts/g2/docs/training.md)。候选值与组合约束由 [data/policy.py](../src/g2_policy_protocol/data/policy.py) 校验。框架怎么跑训练见各自 `scripts/g2/docs/training.md`。
 
+## 多数据集与图像尺寸
+
+训练 YAML 的 `data` 支持以下写法（schema 仍为 7，需要 0.7.0 协议工具及配套训练/部署代码）：
+
+```yaml
+data:
+  root: ./data
+  cameras: null
+  image_size: [224, 224]   # [高度, 宽度]；可选，统一 letterbox
+  sources:
+    - path: vr/task_a/lerobot_v21
+      weight: 3
+    - name: task_b
+      path: /mnt/data/task_b/lerobot_v21
+      weight: 1
+```
+
+- `data.repo_id` 与 `data.sources` 互斥。旧单源配置保持有效；新列表使用 `path`。
+- 相对 `path` 相对于 `data.root`，绝对路径直接使用；`root` 默认 `./data`，相对训练仓库根目录解析。名称默认取填写的 path，必须唯一。
+- 所有源都不写 weight 时按有效样本数量自然混合；全部填写有限正权重时按完整 episode 重复近似加权，不能只填一部分。权重 3:1 表示目标采样比例约 75%:25%，不要求每个 batch 配平。启动/inspect 输出实际占比；长短 episode 和小数重复会影响精度。
+- 训练只复制索引，不合并或修改源数据。历史帧和动作 chunk 不跨 episode 或数据源。
+- 验证集在每个源内部按 episode 划分，不重复、不加权，使用训练集归一化统计量。
+- LeRobot 在样本进入 batch 前 resize；未设置 image_size 时要求各源对应相机形状兼容。OpenPI Pi05 的 image_size 仅接受 `[224, 224]`，沿用模型最终 resize。
+- 模型依然使用同一套 state/action、相机与控制语义。Pi05 保留任务文本；ACT 不因数据集增加而获得语言条件能力。
+
+多源 checkpoint 保存混合指纹与归一化信息，部署无需原始训练数据。数据内容、权重或策略改变时新建实验。LeRobot 复用原生数据顺序续训（相同 batch 和并行规模）；OpenPI 恢复训练状态，但不保证接续原来的数据顺序。
+
 ## 按问题配置
 
 | 问题 | 配置 | 候选或规则 |

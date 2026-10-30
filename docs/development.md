@@ -133,7 +133,7 @@ wholebody 的 test_export_segments 覆盖真实 JPEG/ffmpeg/v2.1/v3 写盘、暂
 python -m pip wheel --no-index --no-deps --no-build-isolation . -w dist
 ```
 
-当前源码构建产物为 `g2_policy_protocol-0.6.0-py3-none-any.whl`。发布新版本时同步更新版本声明、调用方依赖、相关文档和 [CHANGELOG](../CHANGELOG.md)；涉及不兼容契约变更时，明确通信协议的兼容边界。当前源码只接受 `g2.policy.v3`，升级时同步更新客户端和服务端，并重新构建 wheel，不能复用旧的同版本文件。
+当前源码构建产物为 `g2_policy_protocol-0.7.0-py3-none-any.whl`。发布新版本时同步更新版本声明、调用方依赖、相关文档和 [CHANGELOG](../CHANGELOG.md)；涉及不兼容契约变更时，明确通信协议的兼容边界。当前源码只接受 `g2.policy.v3`，升级时同步更新客户端和服务端，并重新构建 wheel，不能复用旧的同版本文件。
 
 部署时：
 

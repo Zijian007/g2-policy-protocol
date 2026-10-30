@@ -8,12 +8,12 @@
 
 ## 安装与版本
 
-域控和 GPU 环境都要安装，并使用同一份 `g2-policy-protocol==0.6.0` 源码或 wheel（各机器用途见[部署拓扑](../README.md#部署拓扑)）。Python ≥3.10，依赖 NumPy、MessagePack、SciPy、websockets、Pillow，一条命令装全：
+域控和 GPU 环境都要安装，并使用同一份 `g2-policy-protocol==0.7.0` 源码或 wheel（各机器用途见[部署拓扑](../README.md#部署拓扑)）。Python ≥3.10，依赖 NumPy、MessagePack、SciPy、websockets、Pillow，一条命令装全：
 
 ```bash
 python -m pip install -e .
 # 只有 wheel 时
-python -m pip install /path/to/g2_policy_protocol-0.6.0-py3-none-any.whl
+python -m pip install /path/to/g2_policy_protocol-0.7.0-py3-none-any.whl
 ```
 
 wholebody 自身的运行依赖由该项目管理。模型框架和 GPU 依赖由模型项目管理。wheel 不含 examples 和 Markdown，完整源码交付见[开发维护](development.md#对外交付)。

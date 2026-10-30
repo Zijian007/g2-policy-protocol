@@ -1,6 +1,13 @@
 # CHANGELOG
 
-协议不做跨版本兼容：升级任何一项都需要两端同时换成同一个新 wheel，先重启 GPU server，再启动域控 client。
+线上通信协议当前为 `g2.policy.v3`。不兼容协议升级需要同时更新客户端和服务端；新增训练工具不改变线上消息格式。
+
+## 0.7.0
+
+- 新增 `data.sources`：本地 `path`、可选名称、全填或全不填的正权重，以及可复现的 episode 级重复计划和虚拟区间映射。
+- 新增 `data.image_size` 校验、RGB letterbox、数据身份与混合指纹工具；共享模块不依赖训练框架。
+- 训练 YAML 保持 schema 7，旧 `data.root + data.repo_id` 不变。包含 `sources` 或 `image_size` 的新快照需要配套升级训练端和部署端；旧部署代码会拒绝这些新字段。
+- 线上 `g2.policy.v3` 与 0.6.0 相同，磁盘数据契约不变。
 
 ## 0.6.0
 

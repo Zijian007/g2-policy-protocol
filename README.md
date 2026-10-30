@@ -36,6 +36,6 @@
 | 理解架构与数据边界、修改代码、测试和交付 | [开发维护](docs/development.md) |
 | 版本变更与迁移 | [CHANGELOG](CHANGELOG.md) |
 
-从[安装与接入](docs/guide.md)开始；不熟悉 pose20、rot6d、RTC 等缩写时先看[术语](docs/protocol.md#术语)。当前源码版本见 `pyproject.toml`（0.6.0），只使用 `g2.policy.v3`。
+从[安装与接入](docs/guide.md)开始；不熟悉 pose20、rot6d、RTC 等缩写时先看[术语](docs/protocol.md#术语)。当前源码版本见 `pyproject.toml`（0.7.0），只使用 `g2.policy.v3`。
 
 完整训练 YAML 和训练命令由模型仓库维护，见 [OpenPI](../openpi/scripts/g2/docs/training.md)和 [LeRobot](../lerobot-finetune/scripts/g2/docs/training.md)。这类跨仓库链接需要四个仓库位于同一父目录。
