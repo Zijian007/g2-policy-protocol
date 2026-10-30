@@ -1,11 +1,12 @@
 """Portable, pickle-free observation fixtures for offline server integration."""
 
-import argparse
 from pathlib import Path
 
 import numpy as np
+from PIL import Image
 
 from . import protocol as p
+from .images import encode_jpeg
 
 
 def synthetic_sample():
@@ -74,13 +75,9 @@ def load_sample(path):
 
 
 def prepare_images(sample, metadata):
-    """Prepare only required cameras. Pillow is an optional integration-tool dependency."""
-    from PIL import Image
-
-    from .images import encode_jpeg
-
+    """Prepare only required cameras: resize/letterbox, then JPEG when negotiated."""
     result = {}
-    bilinear = Image.Resampling.BILINEAR if hasattr(Image, "Resampling") else Image.BILINEAR
+    bilinear = Image.Resampling.BILINEAR
     for camera in metadata["required_cameras"]:
         if camera not in sample["images"]:
             raise ValueError(f"sample missing required camera: {camera}")
@@ -123,14 +120,3 @@ def synthetic_context(sample, metadata):
             result[key] = np.tile(value, (spec["history_steps"], 1)) if key.endswith("_history") else value
     return result
 
-
-def main():
-    parser = argparse.ArgumentParser(description="Write a synthetic G2 observation fixture (.npz)")
-    parser.add_argument("output", type=Path)
-    args = parser.parse_args()
-    save_sample(args.output, synthetic_sample())
-    print(f"Saved synthetic observation: {args.output}")
-
-
-if __name__ == "__main__":
-    main()

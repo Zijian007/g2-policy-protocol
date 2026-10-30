@@ -33,7 +33,7 @@
 | `data.encoding` | `encode_state`、`ActionCodec`；坐标/旋转转换与状态/动作编码 |
 | `data.dataset` | `validate_dataset_contract`、`TemporalDataset`、`references_from_sample`、`action_label_column` |
 
-导入路径均以 `g2_policy_protocol` 开头。依赖方向为 `dataset → encoding → policy`；能力推导在调用时使用通信层，读取 policy 本身不加载数值库、模型框架或图像库。
+导入路径均以 `g2_policy_protocol` 开头。依赖方向为 `dataset → encoding → policy`；能力推导使用通信层；整个包不导入模型框架或机器人运行时。
 
 `TemporalDataset` 的 `source_fps` / `sample_hz` 分别表示源数据帧率和目标采样频率；`action_label_column()` 返回训练动作标签的磁盘列。完整源码树与定义来源见[开发维护](development.md#源码组织与定义来源)，policy 候选值与坐标语义见[配置参考](policy-config.md)。
 
@@ -74,8 +74,8 @@ src/g2_policy_protocol/
   codec.py           JSON / MessagePack；NumPy / Base64
   validation.py      刚体变换校验
   server.py          WebSocket 边界与模型工作线程
-  images.py          可选 JPEG 编解码
-  samples.py         模拟观测与样本生成命令
+  images.py          JPEG 编解码
+  samples.py         验收用合成 / 真实观测样本
   check_server.py    独立服务验收命令
   data/
     contract.py      固定列名、向量布局和相机键
@@ -96,10 +96,10 @@ JSON Schema 校验只用于开发测试；运行时不读取 Schema 文件，不
 
 生成器只支持当前使用的静态关键字，遇到新的不支持规则会报错。修改 Schema 后必须重新生成并运行测试；测试也检查修改边界、枚举或必填字段会改变生成代码的行为。
 
-完整测试需要几何和服务工具的可选依赖，以及 `pytest`、`jsonschema`。先在开发环境安装：
+完整测试另需 `pytest`、`jsonschema`。先在开发环境安装：
 
 ```bash
-python -m pip install -e '.[geometry,tools]' pytest jsonschema
+python -m pip install -e . pytest jsonschema
 ```
 
 在本仓库根目录执行生成和验证：
@@ -148,14 +148,14 @@ Python API 统一使用 `g2_policy_protocol.data`，并将图像工具移到 `g2
 
 ## 对外交付
 
-wheel 的安装方式见[安装与接入](guide.md#安装与版本)。wheel 包含 `g2-policy-check` / `g2-policy-sample` 命令及其模块；不包含 Markdown 文档和 examples 源码。使用当前源码重新构建 wheel，旧的同版本 wheel 没有新工具。
+wheel 的安装方式见[安装与接入](guide.md#安装与版本)。wheel 包含 `g2-policy-check` 命令及其模块；不包含 Markdown 文档和 examples 源码。使用当前源码重新构建 wheel，旧的同版本 wheel 没有新工具。
 
-需要完整文档与示例时运行：
+需要完整文档与示例时，从已提交的源码打包：
 
 ```bash
-python tools/build_handoff.py
+git archive --prefix=g2-policy-protocol/ -o dist/g2-policy-protocol-handoff.zip HEAD
 ```
 
-产物 `dist/g2-policy-protocol-handoff.zip` 包含源码、文档、示例、生成工具和测试；不包含 `.git`、构建缓存、模型权重或观测录制。接收者解压后可以独立安装、开发并验收，无需 wholebody、lerobot-finetune 或 OpenPI 仓库。版本要求仍与域控一致；当前仅交付 v3 契约。
+产物包含源码、文档、示例、生成工具和测试；不包含 `.git`、未提交改动、构建缓存、模型权重或观测录制。接收者解压后可以独立安装、开发并验收，无需 wholebody、lerobot-finetune 或 OpenPI 仓库。版本要求仍与域控一致；当前仅交付 v3 契约。
 
 交付给集成人员时提供 server 启动命令、模型/协议包版本、连接地址、metadata 配置、普通验收报告以及启用 RTC 时的专项报告。附上使用的样本 provenance、已确认的模型坐标与夹爪约定，并说明尚未进行真实机器人运行验证。

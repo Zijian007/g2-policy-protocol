@@ -8,23 +8,15 @@
 
 ## 安装与版本
 
-域控和 GPU 环境使用同一份 `g2-policy-protocol==0.6.0` 源码或 wheel。Python ≥3.10，基础依赖为 NumPy、MessagePack；`tools` 增加 WebSocket 与图像工具，`geometry` 增加 SciPy。
+域控和 GPU 环境使用同一份 `g2-policy-protocol==0.6.0` 源码或 wheel。Python ≥3.10，依赖 NumPy、MessagePack、SciPy、websockets、Pillow，一条命令装全：
 
 ```bash
-# 运行本页的服务、图像和验收示例
-python -m pip install -e '.[tools]'
-
-# 使用状态/动作几何转换时额外安装
-python -m pip install -e '.[geometry]'
+python -m pip install -e .
+# 只有 wheel 时
+python -m pip install /path/to/g2_policy_protocol-0.6.0-py3-none-any.whl
 ```
 
-只有 wheel 时：
-
-```bash
-python -m pip install '/path/to/g2_policy_protocol-0.6.0-py3-none-any.whl[tools]'
-```
-
-域控只使用通信时可直接安装 wheel，无需 extras；wholebody 自身的运行依赖由该项目管理。模型框架和 GPU 依赖由模型项目管理。wheel 不含 examples 和 Markdown，完整源码交付见[开发维护](development.md#对外交付)。
+wholebody 自身的运行依赖由该项目管理。模型框架和 GPU 依赖由模型项目管理。wheel 不含 examples 和 Markdown，完整源码交付见[开发维护](development.md#对外交付)。
 
 当前源码统一使用 `g2.policy.v3`，旧端需要同步更新。源码调整后需重建 wheel，同版本号不保证内容相同。升级两端代码与协议包后，先重启 GPU server，再启动 client。
 
@@ -47,14 +39,14 @@ g2-policy-check --url ws://127.0.0.1:8000 --report report.json
 
 [`minimal_server.py`](../examples/minimal_server.py) 使用共享 `PolicyServer` 和无状态 `MockPolicy`，声明 v3、双臂 pose20、头部相机、224×224 raw RGB、完整预测块、无 RTC。返回动作重复输入位姿；Ctrl+C 停止服务。
 
-接入真实模型后仍使用同一条验收命令，工具不要求返回动作等于输入。只有 [`minimal_client.py`](../examples/minimal_client.py) 专门检查模拟模型的保持原位行为。跨机联调时 server 使用 `--host 0.0.0.0`，检查命令改为 `--url ws://<gpu-host>:8000`；实际端口以部署配置为准。
+接入真实模型后仍使用同一条验收命令，工具不要求返回动作等于输入。跨机联调时 server 使用 `--host 0.0.0.0`，检查命令改为 `--url ws://<gpu-host>:8000`；实际端口以部署配置为准。
 
 ## 检查 JPEG 传输
 
 停止占用 8000 端口的其他示例后：
 
 ```bash
-python examples/jpeg_server.py
+python examples/minimal_server.py --jpeg
 ```
 
 另一个终端运行：
@@ -63,7 +55,7 @@ python examples/jpeg_server.py
 g2-policy-check --report jpeg-report.json
 ```
 
-该示例要求头部和右腕两张 JPEG 图像、letterbox 到 224×224，声明右臂执行。解码使用可选的 [`images.decode_images()`](../src/g2_policy_protocol/images.py)，得到 RGB uint8 数组后再检查尺寸。核心协议库不会主动解码图像。若使用 OpenCV 的 `imdecode()`，结果为 BGR，必须通过 `cv2.cvtColor(image, cv2.COLOR_BGR2RGB)` 转为 RGB 后再交给模型。
+该示例要求头部和右腕两张 JPEG 图像、letterbox 到 224×224，声明右臂执行。解码使用 [`images.decode_images()`](../src/g2_policy_protocol/images.py)，得到 RGB uint8 数组后再检查尺寸。核心协议库不会主动解码图像。若使用 OpenCV 的 `imdecode()`，结果为 BGR，必须通过 `cv2.cvtColor(image, cv2.COLOR_BGR2RGB)` 转为 RGB 后再交给模型。
 
 ## 接入模型
 
@@ -126,7 +118,7 @@ PolicyServer(policy, metadata=metadata, host="0.0.0.0", port=8000).serve_forever
 
 ### 状态与动作转换
 
-安装 [geometry 可选依赖](guide.md#安装与版本)后，共享编解码器的使用方式见 [`examples/model_adapter.py`](../examples/model_adapter.py)：
+共享编解码器的使用方式见 [`examples/model_adapter.py`](../examples/model_adapter.py)：
 
 ```bash
 python examples/model_adapter.py
@@ -214,14 +206,7 @@ g2-policy-check --sample observation.npz --rtc --report rtc-report.json
 | `provenance` | Unicode 标量字符串，记录数据为合成或真实来源、脱敏情况及必要的标定背景 |
 | 三个相机名称 | `head_color` / `hand_left_color` / `hand_right_color`，各自为 RGB uint8 H×W×3；至少一张，且覆盖服务端所需相机 |
 
-生成可复现的合成文件：
-
-```bash
-g2-policy-sample synthetic.npz
-g2-policy-check --sample synthetic.npz --report synthetic-report.json
-```
-
-合成样本含三张 240×320 彩色图案、单位旋转、示例位置和零关节状态。它们不是机器人录制数据，示例位置与关节状态也不保证符合真实机器人运动学。若模型需要真实场景，请由有权限的数据持有人导出并分发脱敏样本。本仓库未附真实录制。
+不传 `--sample` 时工具使用内置合成样本：三张 240×320 彩色图案、单位旋转、示例位置和零关节状态。它们不是机器人录制数据，示例位置与关节状态也不保证符合真实机器人运动学。若模型需要真实场景，请由有权限的数据持有人导出并分发脱敏样本。本仓库未附真实录制。
 
 真实样本的导出方式如下，变量由数据持有人提供：
 

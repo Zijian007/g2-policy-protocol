@@ -1,7 +1,4 @@
-"""Shared WebSocket boundary. Backends own model loading and observation conversion.
-
-Requires the optional ``tools`` dependencies; importing the wire contract does not.
-"""
+"""Shared WebSocket boundary. Backends own model loading and observation conversion."""
 
 import asyncio
 import http
@@ -9,6 +6,9 @@ import logging
 import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Protocol
+
+from websockets.asyncio.server import serve
+from websockets.exceptions import ConnectionClosed
 
 from . import codec, protocol
 
@@ -39,8 +39,6 @@ class PolicyServer:
         asyncio.run(self.run())
 
     async def run(self):
-        from websockets.asyncio.server import serve
-
         try:
             async with serve(
                 self._handler,
@@ -56,8 +54,6 @@ class PolicyServer:
             self._worker.shutdown(wait=True, cancel_futures=True)
 
     async def _handler(self, websocket):
-        from websockets.exceptions import ConnectionClosed
-
         encoding = codec.encoding_from_path(getattr(getattr(websocket, "request", None), "path", "/"))
         loop = asyncio.get_running_loop()
         policy = self._policy.new_session() if hasattr(self._policy, "new_session") else self._policy

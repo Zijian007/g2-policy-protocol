@@ -4,6 +4,7 @@ import math
 from functools import cache, partial
 
 import numpy as np
+from scipy.spatial.transform import Rotation, Slerp
 
 from . import encoding
 from .policy import action_branch, control_quantity
@@ -160,8 +161,6 @@ class TemporalDataset:
             fraction = clamped_frame - lower_frame
             value = start_values * (1 - fraction) + end_values * fraction
             if key in ("state.pose", "action.pose", "state.arm_base"):
-                from scipy.spatial.transform import Rotation, Slerp
-
                 for offset in (0,) if key == "state.arm_base" else (0, 10):
                     rotations = encoding.rotation_matrix(
                         np.stack([start_values[offset + 3 : offset + 9], end_values[offset + 3 : offset + 9]])

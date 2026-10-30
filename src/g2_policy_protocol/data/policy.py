@@ -3,6 +3,7 @@
 import copy
 import math
 
+from g2_policy_protocol import protocol
 from g2_policy_protocol.validation import validate_rigid_transform
 
 SOURCES = ("state", "action")
@@ -190,8 +191,6 @@ def _validate_encoding(spec, group, kind):
 
 
 def policy_capabilities(policy, cameras, *, prompt, reset):
-    from g2_policy_protocol import protocol
-
     state, action, timing = policy["state"], policy["action"], policy["timing"]
     pose = state["pose"]["enabled"] or action["pose"]["enabled"]
     joint = state["joint"]["enabled"] or action["joint"]["enabled"]

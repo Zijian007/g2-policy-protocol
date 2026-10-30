@@ -7,6 +7,7 @@ from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import numpy as np
+from websockets.sync.client import connect
 
 from . import codec
 from . import protocol as p
@@ -24,8 +25,6 @@ def connection_uri(uri, encoding):
 
 def check_connection(uri, encoding, sample, *, requests=2, timeout=30,
                      policy_hz=None, rtc=False, semantic_checks=True):
-    from websockets.sync.client import connect
-
     result = {"encoding": encoding, "status": "failed", "requests": [], "warnings": []}
     try:
         with connect(connection_uri(uri, encoding), compression=None, max_size=None,

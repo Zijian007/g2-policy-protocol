@@ -5,13 +5,11 @@ import threading
 from types import SimpleNamespace
 
 import numpy as np
-import pytest
 from g2_policy_protocol import codec, protocol
 from g2_policy_protocol.server import PolicyServer
 
 
 def test_inference_keeps_loop_responsive_and_serializes_sessions_and_reset():
-    pytest.importorskip("websockets")
     metadata = protocol.build_metadata(
         policy_hz=30, action_horizon=1, required_cameras=[], reset_supported=True,
     )

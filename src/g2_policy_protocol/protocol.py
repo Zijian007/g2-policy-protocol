@@ -12,6 +12,7 @@ from . import _generated as fields
 from . import _validation as check
 from ._validation import finite_action_rows, finite_vector
 from .codec import validate_image
+from .validation import validate_rigid_transform
 
 PROTOCOL = fields.PROTOCOL
 CAMERA_IDS = fields.CAMERA_IDS
@@ -20,9 +21,6 @@ POSE_DIM = fields.POSE_DIM
 POSE_FIELDS = fields.POSE_FIELDS
 JOINT_DIM = fields.JOINT_DIM
 JOINT_FIELDS = fields.JOINT_FIELDS
-FRAME = fields.FRAME
-ROTATION = fields.ROTATION
-ACTION_SEMANTICS = fields.ACTION_SEMANTICS
 ENCODING_VALUES = fields.ENCODING_VALUES
 ACTION_TYPE = fields.ACTION_TYPE
 ERROR_TYPE = fields.ERROR_TYPE
@@ -56,9 +54,9 @@ def build_action_spec(control_quantity="pose_target"):
         "dim": len(names),
         "fields": names,
         "units": units * 2,
-        "frame": "base_link",
-        "ee_frame": "flange",
-        "representation": "absolute",
+        "frame": fields.FRAME,
+        "ee_frame": fields.EE_FRAME,
+        "representation": fields.ACTION_SEMANTICS,
     }
 
 
@@ -225,13 +223,11 @@ def parse_context(payload, metadata):
                 frames[camera] = sequence
             result[name] = frames
         elif name == "base_to_parent":
-            from .validation import validate_rigid_transform
-
             arr = np.asarray(item, dtype=np.float32)
             validate_rigid_transform(arr.tolist(), "context.base_to_parent")
             result[name] = arr
         elif name.endswith("_history"):
-            width = 16 if name == "joint_history" else 20
+            width = JOINT_DIM if name == "joint_history" else POSE_DIM
             arr = np.asarray(item, dtype=np.float32)
             if (
                 arr.shape != (spec["history_steps"], width)
@@ -242,7 +238,7 @@ def parse_context(payload, metadata):
         else:
             result[name] = finite_vector(
                 item,
-                16 if name in ("object_joint", "start_joint", "command_joint") else 20,
+                JOINT_DIM if name in ("object_joint", "start_joint", "command_joint") else POSE_DIM,
                 name,
             )
     return result
@@ -292,8 +288,8 @@ def parse_request(payload, *, metadata):
         raise ValueError("server requires a nonempty prompt")
     result["prompt"] = prompt
     for key, required, width in [
-        ("state", spec["pose"], 20),
-        ("joint_state", spec["joint"], 16),
+        ("state", spec["pose"], POSE_DIM),
+        ("joint_state", spec["joint"], JOINT_DIM),
     ]:
         if required or key in payload:
             result[key] = finite_vector(payload.get(key), width, key)

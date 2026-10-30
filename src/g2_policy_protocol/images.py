@@ -1,15 +1,14 @@
-"""Optional Pillow helpers for integration tools; core protocol never decodes images."""
+"""JPEG helpers for adapters and the check tool; the protocol core never decodes images."""
 
 from io import BytesIO
 
 import numpy as np
+from PIL import Image
 
 from . import protocol as p
 
 
 def encode_jpeg(image):
-    from PIL import Image
-
     p.validate_image(image, encoding="raw")
     buffer = BytesIO()
     Image.fromarray(image).save(buffer, format="JPEG", quality=90)
@@ -17,8 +16,6 @@ def encode_jpeg(image):
 
 
 def decode_images(images, metadata):
-    from PIL import Image
-
     decoded = {}
     for camera, image in images.items():
         if metadata["image_encoding"] == "jpeg":

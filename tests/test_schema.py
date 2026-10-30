@@ -163,6 +163,7 @@ def test_redundant_metadata_fields_are_not_part_of_wire_contract(field):
 
 def test_fixed_semantics_are_generated_from_schema_instead_of_sent():
     assert p.PROTOCOL == 'g2.policy.v3'
-    assert (p.FRAME, p.ROTATION, p.ACTION_SEMANTICS) == ('base_link', 'rot6d', 'absolute')
+    assert p.build_action_spec()['frame'] == 'base_link'
+    assert p.build_action_spec()['representation'] == 'absolute'
     assert p.ENCODING_VALUES == ('msgpack', 'json')
     p.validate_metadata(metadata(extensions={'policy_type': 'my_custom_model'}))

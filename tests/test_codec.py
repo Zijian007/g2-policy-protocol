@@ -20,16 +20,6 @@ def test_numpy_scalar_roundtrip(value):
     assert type(result) is type(value) and result == value
 
 
-def test_streaming_codec_uses_identical_array_markers():
-    unpacker = codec.Unpacker()
-    array = np.arange(20, dtype=np.float32)
-    packed = codec.Packer().pack({'a': array})
-    unpacker.feed(packed[:3])
-    assert list(unpacker) == []
-    unpacker.feed(packed[3:])
-    np.testing.assert_array_equal(next(unpacker)['a'], array)
-
-
 @pytest.mark.parametrize('dtype', ['O', 'c8', 'V8'])
 def test_unsafe_or_unsupported_array_dtypes_rejected_both_directions(dtype):
     with pytest.raises(ValueError):

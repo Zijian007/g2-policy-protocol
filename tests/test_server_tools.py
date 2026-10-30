@@ -39,7 +39,6 @@ def test_object_sample_rejected(tmp_path):
 @pytest.mark.parametrize("encoding", ["raw", "jpeg"])
 @pytest.mark.parametrize("resize", ["resize", "letterbox"])
 def test_image_preparation_and_decode(encoding, resize):
-    pytest.importorskip("PIL.Image")
     from g2_policy_protocol.images import decode_images
 
     sample = synthetic_sample()
@@ -64,7 +63,6 @@ def test_image_preparation_and_decode(encoding, resize):
 
 
 def test_missing_camera():
-    pytest.importorskip("PIL.Image")
     sample = synthetic_sample()
     del sample["images"]["hand_right_color"]
     with pytest.raises(ValueError, match="missing required camera"):
@@ -147,7 +145,6 @@ def test_additional_action_diagnostics():
 
 
 def test_model_adapter_example_uses_shared_conventions():
-    pytest.importorskip("scipy")
     example = runpy.run_path(
         str(Path(__file__).resolve().parents[1] / "examples/model_adapter.py"),
         run_name="__main__",
@@ -165,7 +162,6 @@ def test_model_adapter_example_uses_shared_conventions():
 @pytest.mark.parametrize("encoding", ["msgpack", "json"])
 @pytest.mark.parametrize("outcome", ["success", "inference_error", "invalid_request"])
 def test_policy_instance_request_response(encoding, outcome):
-    pytest.importorskip("websockets.sync.server")
     from g2_policy_protocol import codec
 
     example = runpy.run_path(str(Path(__file__).resolve().parents[1] / "examples/minimal_server.py"))
@@ -180,7 +176,7 @@ def test_policy_instance_request_response(encoding, outcome):
                 raise RuntimeError("model failed")
             return super().infer(observation)
 
-    policy = RecordingPolicy(action_horizon=2)
+    policy = RecordingPolicy(metadata=meta)
     request = p.build_request(
         request_id=42,
         prompt=sample["prompt"],

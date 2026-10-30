@@ -111,20 +111,6 @@ assert contract.G2.joint.names == protocol.JOINT_FIELDS
     assert result.returncode == 0, result.stderr
 
 
-def test_policy_configuration_stays_independent_of_numeric_and_transport_dependencies():
-    result = subprocess.run([sys.executable, '-c', '''
-import importlib.abc, sys
-class Block(importlib.abc.MetaPathFinder):
-    def find_spec(self, fullname, path=None, target=None):
-        if fullname.split('.')[0] in ('numpy', 'scipy', 'PIL', 'websockets', 'msgpack', 'torch', 'jax'):
-            raise AssertionError(fullname)
-sys.meta_path.insert(0, Block())
-from g2_policy_protocol.data.policy import resolve_policy
-assert resolve_policy({}, horizon=4)['timing']['action_horizon'] == 4
-'''], capture_output=True, text=True, timeout=10)
-    assert result.returncode == 0, result.stderr
-
-
 def test_unknown_response_mode_is_rejected_during_handshake():
     with pytest.raises(ValueError, match="response_mode"):
         p.build_metadata(policy_hz=30, extensions={"response_mode": "full_chunck"})

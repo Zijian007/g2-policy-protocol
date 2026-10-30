@@ -3,14 +3,13 @@
 import dataclasses
 
 import numpy as np
+from scipy.spatial.transform import Rotation
 
 from .policy import QUANTITIES, action_branch
 
 
 def rotation_matrix(value, representation="rot6d"):
     """Project rot6d onto SO(3); quaternions use xyzw, axis angles use radians."""
-    from scipy.spatial.transform import Rotation
-
     value = np.asarray(value, dtype=np.float64)
     shape = value.shape[:-1]
     if representation == "rot6d":
@@ -31,8 +30,6 @@ def rotation_matrix(value, representation="rot6d"):
 
 
 def rotation_vector(matrix, representation="rot6d"):
-    from scipy.spatial.transform import Rotation
-
     matrix = np.asarray(matrix)
     shape = matrix.shape[:-2]
     if representation == "rot6d":
