@@ -133,9 +133,7 @@ wholebody 的 test_export_segments 覆盖真实 JPEG/ffmpeg/v2.1/v3 写盘、暂
 python -m pip wheel --no-index --no-deps --no-build-isolation . -w dist
 ```
 
-当前源码构建产物为 `g2_policy_protocol-0.6.0-py3-none-any.whl`。发布新版本时同步更新版本声明、调用方依赖和相关文档；涉及不兼容契约变更时，明确通信协议的兼容边界。当前源码只接受 `g2.policy.v3`，升级时同步更新客户端和服务端。
-
-Python API 统一使用 `g2_policy_protocol.data`，并将图像工具移到 `g2_policy_protocol.images`；旧导入路径不保留。升级时同步更新调用方并重新构建 wheel，不能复用旧的同版本文件。本次同时移除 v2、版本选择参数和握手中的 `execution_steps`；`build_response` / `parse_response` 必须传入 metadata，动作布局用 `build_action_spec` 构造。磁盘列格式沿用现有契约。
+当前源码构建产物为 `g2_policy_protocol-0.6.0-py3-none-any.whl`。发布新版本时同步更新版本声明、调用方依赖、相关文档和 [CHANGELOG](../CHANGELOG.md)；涉及不兼容契约变更时，明确通信协议的兼容边界。当前源码只接受 `g2.policy.v3`，升级时同步更新客户端和服务端，并重新构建 wheel，不能复用旧的同版本文件。
 
 部署时：
 
@@ -156,6 +154,6 @@ wheel 的安装方式见[安装与接入](guide.md#安装与版本)。wheel 包�
 git archive --prefix=g2-policy-protocol/ -o dist/g2-policy-protocol-handoff.zip HEAD
 ```
 
-产物包含源码、文档、示例、生成工具和测试；不包含 `.git`、未提交改动、构建缓存、模型权重或观测录制。接收者解压后可以独立安装、开发并验收，无需 wholebody、lerobot-finetune 或 OpenPI 仓库。版本要求仍与域控一致；当前仅交付 v3 契约。
+产物包含源码、文档、示例、生成工具和测试；不包含 `.git`、未提交改动、构建缓存、模型权重或观测录制。接收者解压后可以独立安装、开发并验收，无需 wholebody、lerobot-finetune 或 OpenPI 仓库；但文档中指向这些仓库的相对链接（`../openpi/…`、`../../wholebody/…` 等）在压缩包里会失效，需要时另附对应文档。版本要求仍与域控一致；当前仅交付 v3 契约。
 
 交付给集成人员时提供 server 启动命令、模型/协议包版本、连接地址、metadata 配置、普通验收报告以及启用 RTC 时的专项报告。附上使用的样本 provenance、已确认的模型坐标与夹爪约定，并说明尚未进行真实机器人运行验证。

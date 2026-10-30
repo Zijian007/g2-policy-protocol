@@ -4,11 +4,11 @@
 
 从安装、模拟服务开始，再接入模型或 wholebody，最后使用同一套工具验收。以下命令在本仓库根目录执行。
 
-[安装](#安装与版本) · [模拟服务](#启动模拟服务) · [模型接入](#接入模型) · [wholebody](#接入-wholebody) · [验收](#独立验收)
+[安装](#安装与版本) · [模拟服务](#启动模拟服务) · [模型接入](#接入模型) · [wholebody](#接入-wholebody) · [验收](#独立验收) · [排错](#排错)
 
 ## 安装与版本
 
-域控和 GPU 环境使用同一份 `g2-policy-protocol==0.6.0` 源码或 wheel。Python ≥3.10，依赖 NumPy、MessagePack、SciPy、websockets、Pillow，一条命令装全：
+域控和 GPU 环境都要安装，并使用同一份 `g2-policy-protocol==0.6.0` 源码或 wheel（各机器用途见[部署拓扑](../README.md#部署拓扑)）。Python ≥3.10，依赖 NumPy、MessagePack、SciPy、websockets、Pillow，一条命令装全：
 
 ```bash
 python -m pip install -e .
@@ -171,9 +171,7 @@ wholebody 的推理 Shell 共用 `app/policy_launcher.py`，通过 `--config` �
 
 协议校验不检查机器人动作的可达性或运动约束。动作限速、可达性和关节规划属于 G2 控制层。`control_quantity` 还必须有已绑定的执行器，否则域控在打开硬件前拒绝。
 
-当前 wholebody 应用绑定 `pose_target`（EE 安全门）和 `joint_position`（`wholebody.arm.joint_command` 的关节限位、rad/s 速度上限及发送参数）。关节速度、力矩执行器尚未绑定；非零 `first_target_offset_s` 也未接入调度，均在打开硬件前拒绝。
-
-历史策略通过独立线程按 `history_hz` 采样，episode 开头重复首帧，之后的采样缺口报错。默认应用支持历史和 episode 起点；命令、物体等额外参考需要显式 provider，在 `PolicyControlLoop(context_provider=...)` 接入，不能从当前实测末端伪造。
+当前 wholebody 只绑定 `pose_target` 和 `joint_position`；关节速度、力矩及非零 `first_target_offset_s` 在打开硬件前拒绝。执行器参数、历史采样和额外 context 的接入方式由 wholebody 维护，见 [wholebody policy 通信契约](../../wholebody/docs/dev/policy-protocol.md)。
 
 ## 独立验收
 
@@ -231,3 +229,27 @@ save_sample("observation.npz", {
 工具使用 Pillow 双线性缩放、居中黑色补边、JPEG quality=90。域控的 OpenCV 实现采用相同几何约定，但插值和 JPEG 像素值不保证逐像素一致。要求复现训练预处理时，应额外对比真实 client 数据或双方约定的参考图像。
 
 模型交付所需的版本、配置、样本与报告见[开发维护](development.md#对外交付)。
+
+## 排错
+
+错误信息来自 `protocol.py` 的 `ValueError`。server 端的错误会以 `error` 消息返回给 client，message 为 `异常类型: 原文`。
+
+| 错误信息（节选） | 发生阶段 | 常见原因与处理 |
+|---|---|---|
+| `metadata.protocol has an unsupported value` | 握手 | 一端仍是旧版本。两端换成同一个 wheel，先重启 server |
+| `server policy_hz disagrees with configured policy_hz` | 握手 | client YAML 写死的 `policy_hz` 与模型训练频率不同；改 client 配置或设为 null 接受 server 声明 |
+| `server does not support RTC` | 握手 / 请求 | client 开了 RTC，server 声明 `rtc_supported=false`；关闭 client RTC 或换支持 RTC 的服务 |
+| `action_dt disagrees with policy_hz` | 握手 | 手工构造的 `timing.action_dt` 不等于 1/policy_hz；改用 `build_metadata` 默认值 |
+| `action_spec must use the canonical layout, units and frames` | 握手 | 手写了 action_spec；改用 `build_action_spec(quantity)` |
+| `requires_joint_state disagrees with observation_spec.joint` | 握手 | 两处声明不一致；只设其中一个，让 `build_metadata` 推导另一个 |
+| `missing required cameras` | 请求 | client 没有发送 `required_cameras` 中的相机；检查相机名和 client 相机配置 |
+| `... size disagrees with metadata image_sizes` | 请求 | 图像尺寸与声明不符；client 应按握手缩放，server 解码 JPEG 后再校验 |
+| `server requires a nonempty prompt` | 请求 | `observation_spec.prompt=true` 但未给任务文本 |
+| `history requires observation_time_ns for the latest sample` | 请求 | history_steps>1 时未带观测时间 |
+| `response request_id does not match observation` | 响应 | server 没有原样返回请求 ID，或 client 复用了连接上的旧响应 |
+| `full_chunk response must contain action_horizon actions` | 响应 | 声明 `full_chunk` 却返回了截短的动作；返回完整 H 步或改声明 `variable_chunk` |
+| `actions exceeds action_horizon` | 响应 | 返回步数大于 H；检查模型输出是否多了维度或未裁切 |
+| `inference_delay exceeds ...` | 请求 | RTC delay 超过 H 或前缀长度；检查 client 的延迟估计 |
+| `actions must be finite nonempty (T, D), got ...` | 响应 | 模型输出未还原到完整双臂 D 维（例如单臂未补齐、padding 维未去掉）；也可能含 NaN/Inf；见[状态与动作转换](#状态与动作转换) |
+
+握手和协议都通过、但机器人动作异常时，问题通常不在协议层：先核对坐标系（base_link/flange）、rot6d 列顺序、夹爪 0 开 1 闭、单位，再核对训练与部署的图像预处理是否一致。
