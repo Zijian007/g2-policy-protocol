@@ -96,11 +96,7 @@ JSON Schema 校验只用于开发测试；运行时不读取 Schema 文件，不
 
 生成器只支持当前使用的静态关键字，遇到新的不支持规则会报错。修改 Schema 后必须重新生成并运行测试；测试也检查修改边界、枚举或必填字段会改变生成代码的行为。
 
-完整测试另需 `pytest`、`jsonschema`。先在开发环境安装：
-
-```bash
-python -m pip install -e . pytest jsonschema
-```
+完整测试另需 `pytest`、`jsonschema`。安装步骤统一见[安装教程的独立开发环境](guide.md#独立环境安装开发模拟服务和协议测试)，以下命令使用该环境的 Python。
 
 在本仓库根目录执行生成和验证：
 
@@ -127,11 +123,7 @@ wholebody 的 test_export_segments 覆盖真实 JPEG/ffmpeg/v2.1/v3 写盘、暂
 
 ## 打包与跨端升级
 
-打包环境需已安装 setuptools 和 wheel。验证通过后执行：
-
-```bash
-python -m pip wheel --no-index --no-deps --no-build-isolation . -w dist
-```
+验证通过后，按[安装教程的更新和交付流程](guide.md#更新和交付一致性)构建 wheel、记录 SHA256，并在两端安装同一个文件。本节只维护发布规则，不另列安装命令。
 
 当前源码构建产物为 `g2_policy_protocol-0.7.0-py3-none-any.whl`。发布新版本时同步更新版本声明、调用方依赖、相关文档和 [CHANGELOG](../CHANGELOG.md)；涉及不兼容契约变更时，明确通信协议的兼容边界。当前源码只接受 `g2.policy.v3`，升级时同步更新客户端和服务端，并重新构建 wheel，不能复用旧的同版本文件。
 
@@ -146,11 +138,12 @@ python -m pip wheel --no-index --no-deps --no-build-isolation . -w dist
 
 ## 对外交付
 
-wheel 的安装方式见[安装与接入](guide.md#安装与版本)。wheel 包含 `g2-policy-check` 命令及其模块；不包含 Markdown 文档和 examples 源码。使用当前源码重新构建 wheel，旧的同版本 wheel 没有新工具。
+wheel 的安装方式统一见[安装教程](guide.md#安装与版本)。wheel 包含 `g2-policy-check` 命令及其模块；不包含 Markdown 文档和 examples 源码。使用当前源码重新构建 wheel，旧的同版本 wheel 没有新工具。
 
 需要完整文档与示例时，从已提交的源码打包：
 
 ```bash
+mkdir -p dist
 git archive --prefix=g2-policy-protocol/ -o dist/g2-policy-protocol-handoff.zip HEAD
 ```
 

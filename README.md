@@ -30,7 +30,7 @@
 
 | 要做什么 | 文档 |
 |---|---|
-| 安装、跑通示例、接入模型或 wholebody、验收、排错 | [安装与接入](docs/guide.md) |
+| 唯一安装教程、跑通示例、接入模型或 wholebody、验收、排错 | [安装与接入](docs/guide.md) |
 | 查术语、消息格式、控制量、context 与 RTC | [通信协议](docs/protocol.md) |
 | 配置训练输入、动作、坐标、差分和采样 | [policy 配置](docs/policy-config.md) |
 | 理解架构与数据边界、修改代码、测试和交付 | [开发维护](docs/development.md) |

@@ -2,25 +2,207 @@
 
 [文档入口](../README.md#文档导航) · [通信协议](protocol.md) · [policy 配置](policy-config.md)
 
-从安装、模拟服务开始，再接入模型或 wholebody，最后使用同一套工具验收。以下命令在本仓库根目录执行。
+从安装、模拟服务开始，再接入模型或 wholebody，最后使用同一套工具验收。未指定目录的命令在本仓库根目录执行；`/path/to/python` 等路径需要换成目标机器的实际路径。
 
 [安装](#安装与版本) · [模拟服务](#启动模拟服务) · [模型接入](#接入模型) · [wholebody](#接入-wholebody) · [验收](#独立验收) · [排错](#排错)
 
 ## 安装与版本
 
-域控和 GPU 环境都要安装，并使用同一份 `g2-policy-protocol==0.7.0` 源码或 wheel（各机器用途见[部署拓扑](../README.md#部署拓扑)）。Python ≥3.10，依赖 NumPy、MessagePack、SciPy、websockets、Pillow，一条命令装全：
+本节是 **g2-policy-protocol 的唯一安装教程**。域控和 GPU 环境都要安装协议包，并使用同一份源码或同一个 wheel；模型框架（JAX、Torch、LeRobot）仍由 OpenPI 或 LeRobot 自己管理。当前协议包版本是 `0.7.0`，要求 Python ≥3.10，运行依赖为 NumPy、MessagePack、SciPy、websockets 和 Pillow。
+
+包版本 `0.7.0` 和线上消息协议 `g2.policy.v3` 是两件事。历史上同一个包版本号存在不同构建，按[更新和交付一致性](#更新和交付一致性)核对 SHA256；不能只比较 `0.7.0`。
+
+### 选择安装方式
+
+| 场景 | 推荐方式 | 说明 |
+|---|---|---|
+| OpenPI GPU 训练/服务 | OpenPI 的 `scripts/g2/bootstrap.sh` | 它同时安装 OpenPI、模型依赖和协议包 |
+| LeRobot GPU 训练/服务 | LeRobot 的 `scripts/bootstrap.sh` | 它同时安装 LeRobot、项目依赖和协议包 |
+| wholebody 域控 | 安装到 wholebody 使用的 venv | 只需要协议通信层，不装 JAX、Torch 或 LeRobot |
+| 独立协议开发/模拟服务 | 本仓库自己的 venv | 适合运行 examples、`g2-policy-check` 和协议测试 |
+
+源码方式适合同一台机器上的开发和联调；新服务器和跨机器交付推荐 wheel：先按[更新和交付一致性](#更新和交付一致性)构建、分发文件，再按所属项目安装，最后执行[验证安装](#验证安装)。
+
+### 前置条件
+
+需要 Python ≥3.10、`uv`，以及可访问 Python 包源的网络。Ubuntu 可先安装：
 
 ```bash
-python -m pip install -e .
-# 只有 wheel 时
-python -m pip install /path/to/g2_policy_protocol-0.7.0-py3-none-any.whl
+sudo apt-get update
+sudo apt-get install -y git curl ca-certificates
+curl -LsSf https://astral.sh/uv/install.sh | sh
+source "$HOME/.local/bin/env"
+uv --version
 ```
 
-wholebody 自身的运行依赖由该项目管理。模型框架和 GPU 依赖由模型项目管理。wheel 不含 examples 和 Markdown，完整源码交付见[开发维护](development.md#对外交付)。
+如果使用 OpenPI/LeRobot 训练，还要按对应仓库文档准备 GPU 驱动、Git LFS 和视频解码环境。
+这些不是协议包的安装依赖。
 
-当前源码统一使用 `g2.policy.v3`，旧端需要同步更新。源码调整后需重建 wheel，同版本号不保证内容相同。升级两端代码与协议包后，先重启 GPU server，再启动 client。
+### 独立环境安装（开发、模拟服务和协议测试）
+
+在本仓库根目录执行：
+
+```bash
+uv venv .venv --python 3.11
+uv pip install --python .venv/bin/python -e .
+.venv/bin/python -c "import g2_policy_protocol; print(g2_policy_protocol.__file__)"
+```
+
+要运行协议测试，再安装开发依赖：
+
+```bash
+uv pip install --python .venv/bin/python pytest jsonschema
+```
+
+如果机器已有项目 venv，把 `.venv/bin/python` 换成实际解释器路径即可。不要把另一个项目的 `.venv` 复制过来；editable 安装记录了本机路径。
+
+### OpenPI GPU 环境
+
+OpenPI 使用相邻源码时，目录应为：
+
+```text
+~/openpi/
+~/g2-policy-protocol/
+```
+
+首次安装由 OpenPI 自己的 bootstrap 一次完成，协议包装在 OpenPI 的 `.venv` 中：
+
+```bash
+cd ~/openpi
+bash scripts/g2/bootstrap.sh
+# 开发测试环境：
+# bash scripts/g2/bootstrap.sh --dev
+```
+
+如果只拿 wheel，不放相邻协议源码：
+
+```bash
+cd ~/openpi
+G2_PROTOCOL_WHEELS="$HOME/g2-wheels" bash scripts/g2/bootstrap.sh
+```
+
+`G2_PROTOCOL_WHEELS` 目录必须包含目标 wheel，例如
+`g2_policy_protocol-0.7.0-py3-none-any.whl`。OpenPI bootstrap 负责安装项目本身、
+OpenPI 依赖和协议包；不要只执行 `uv venv` 或只安装第三方依赖。
+若目标环境已有旧协议包，bootstrap 结束后按[更新和交付一致性](#更新和交付一致性)显式刷新并验证。
+
+### LeRobot GPU 环境
+
+LeRobot 项目使用自己的 bootstrap。相邻源码方式：
+
+```bash
+cd ~/lerobot-finetune
+bash scripts/bootstrap.sh
+```
+
+wheel 方式：
+
+```bash
+cd ~/lerobot-finetune
+G2_PROTOCOL_WHEELS="$HOME/g2-wheels" bash scripts/bootstrap.sh
+```
+
+### wholebody 域控环境
+
+将协议安装到 wholebody 实际启动脚本使用的 venv；下面的路径只是示例：
+
+```bash
+uv pip install --python /path/to/wholebody/.venv/bin/python -e /path/to/g2-policy-protocol
+```
+
+跨机器交付时安装 wheel：
+
+```bash
+uv pip install --python /path/to/wholebody/.venv/bin/python \
+  /path/to/g2_policy_protocol-0.7.0-py3-none-any.whl
+```
+
+wholebody 自身的运行依赖由 wholebody 管理；不要把 OpenPI、Torch 或 JAX 依赖装进域控环境。
+wheel 不包含 examples 和 Markdown；完整源码交付见[开发维护](development.md#对外交付)。
+
+### 验证安装
+
+在每台机器上都使用实际启动服务或客户端的同一个解释器：
+
+```bash
+/path/to/python - <<'PY'
+from importlib.metadata import version
+import g2_policy_protocol
+from g2_policy_protocol.data.sources import resolve_sources
+
+print("package:", version("g2-policy-protocol"))
+print("module:", g2_policy_protocol.__file__)
+assert version("g2-policy-protocol") == "0.7.0"
+sources = resolve_sources({"sources": [
+    {"path": "probe-a", "weight": "auto"},
+    {"path": "probe-b", "weight": "auto"},
+]}, base_dir=".")
+assert [source["weight"] for source in sources] == [None, None]
+print("weight: auto supported")
+PY
+uv pip check --python /path/to/python
+```
+
+`module` 应指向预期的源码目录或 wheel 的 `site-packages`，而不是另一份旧 venv。
+`weight: auto supported` 验证当前数据混合功能可用，不访问数据集文件，也不能代替 wheel 内容一致性校验。
+OpenPI 使用 `.venv/bin/python` 执行这段验证，再运行 `bash scripts/g2/train/train_pipeline.sh --dry-run` 检查实际配置；多源配置需要本地数据元数据。
+
+### 更新和交付一致性
+
+仅以 `-e` 安装的协议源码会直接反映文件变化；OpenPI 的相邻路径依赖默认会构建后安装，修改源码不代表已安装内容同步变化。
+若使用相邻源码，同版本更新可在对应项目环境中显式刷新：
+
+```bash
+uv pip install --python /path/to/python --no-deps --reinstall /path/to/g2-policy-protocol
+```
+
+`--no-deps` 仅用于依赖未变化的协议包刷新；版本或依赖要求有变化时，先更新各项目的依赖声明和锁文件，再使用各项目 bootstrap 完整同步。
+发布新的代码变更时更新包版本及调用方约束，避免继续覆盖同版本发行文件。
+
+wheel 在保存了当前改动的源码目录中构建。使用新的输出目录，并让 uv 先生成 sdist、再从 sdist 构建 wheel，避免复用本地 `build/` 中已删除模块的残留：
+
+```bash
+cd ~/g2-policy-protocol
+G2_PROTOCOL_BUILD_DIR="$(mktemp -d /tmp/g2-protocol-wheel-XXXXXX)"
+uv build --out-dir "$G2_PROTOCOL_BUILD_DIR"
+sha256sum "$G2_PROTOCOL_BUILD_DIR/g2_policy_protocol-0.7.0-py3-none-any.whl"
+```
+
+把上一步生成的**同一个 wheel 文件**复制到域控和 GPU 服务器的 `~/g2-wheels/` 目录，核对 SHA256 与构建机一致。
+此目录只放当前要安装的协议 wheel，不混放旧构建：
+
+```bash
+sha256sum ~/g2-wheels/g2_policy_protocol-0.7.0-py3-none-any.whl
+```
+
+更新同版本 wheel 时必须显式 `--reinstall`；否则已有安装可能被保留：
+
+```bash
+uv pip install --python /path/to/python --no-deps --reinstall \
+  ~/g2-wheels/g2_policy_protocol-0.7.0-py3-none-any.whl
+```
+
+升级顺序：先在两端安装同一个 wheel，再重启 GPU server，最后启动 wholebody client。
+不能只替换一端。新协议代码和新训练配置必须成套更新。
+
+### 常见安装问题
+
+| 现象 | 原因和处理 |
+|---|---|
+| `No module named 'g2_policy_protocol'` | 安装到了另一份 Python；用实际启动脚本的解释器执行验证和安装命令 |
+| `No module named 'openpi'` | OpenPI 本身没有安装；回到 OpenPI 仓库执行 `scripts/g2/bootstrap.sh` |
+| `weight: auto` 被报成必须是正数 | 使用了旧的同名/同版本 wheel；重新构建并用 `--reinstall` 安装当前 wheel |
+| 版本显示相同但行为不同 | 同版本 wheel 内容不同；比较 SHA256，并重新分发同一个文件 |
+| 协议握手不兼容 | 两端协议或接入代码不一致；同时更新并按升级顺序重启 |
+| `uv` 找不到 | 安装 uv 后重新加载 `$HOME/.local/bin/env`，或使用 uv 的绝对路径 |
 
 ## 启动模拟服务
+
+后续 `python` 和 `g2-policy-check` 命令使用已验证的目标环境。独立环境安装后可在协议仓库根目录激活：
+
+```bash
+source .venv/bin/activate
+```
 
 在一个终端运行：
 
