@@ -106,7 +106,7 @@ def action_dimensions(policy, arm="both"):
     if quantity == "pose_target":
         width = 4 + {"rot6d": 6, "quaternion": 4, "axis_angle": 3}[spec["coordinates"]["rotation"]]
         return width * (2 if arm == "both" else 1), 20
-    if quantity in ("joint_position", "joint_velocity", "joint_torque"):
+    if quantity == "joint_position":
         return 8 * (2 if arm == "both" else 1), 16
     raise ValueError(f"Unsupported G2 control quantity: {spec['quantity']!r}")
 
@@ -223,11 +223,7 @@ class ActionCodec:
         source = source_pose if kind == "pose" else source_joint
         selection = arm_slice(self.arm, wire_dim)
         if self.arm != "both":
-            measured = (
-                source(obs, "state")
-                if quantity in ("pose_target", "joint_position")
-                else np.zeros(wire_dim, np.float32)
-            )
+            measured = source(obs, "state")
         if spec["delta"]:
             reference = (
                 measured

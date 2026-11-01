@@ -7,14 +7,12 @@ import numpy as np
 from scipy.spatial.transform import Rotation, Slerp
 
 from . import encoding
-from .policy import action_branch, control_quantity
+from .policy import action_branch
 
 
 def action_label_column(policy):
     kind, spec = action_branch(policy)
-    suffix = {"pose": "pose", "position": "joint", "velocity": "joint_velocity", "torque": "joint_torque"}[
-        spec["quantity"]
-    ]
+    suffix = {"pose": "pose", "position": "joint"}[spec["quantity"]]
     return f"{spec['source']}.{suffix}"
 
 
@@ -27,10 +25,7 @@ def validate_dataset_contract(features, info, policy, cameras):
         required.add("state.joint")
     column = action_label_column(policy)
     kind, spec = action_branch(policy)
-    if column not in features and control_quantity(policy) == "joint_velocity":
-        required.add(f"{spec['source']}.joint")
-    else:
-        required.add(column)
+    required.add(column)
     for group in ("state", "action"):
         for branch, disk in (("pose", "action.pose"), ("joint", "action.joint")):
             item = policy[group][branch]
@@ -50,10 +45,6 @@ def validate_dataset_contract(features, info, policy, cameras):
         "action.pose": 20,
         "state.joint": 16,
         "action.joint": 16,
-        "state.joint_velocity": 16,
-        "action.joint_velocity": 16,
-        "state.joint_torque": 16,
-        "action.joint_torque": 16,
     }
     for key in required & dimensions.keys():
         if "shape" in features[key] and tuple(features[key]["shape"]) != (dimensions[key],):
@@ -221,35 +212,8 @@ class TemporalDataset:
         )
         column = action_label_column(self.policy)
         sample["g2.action_is_pad"] = (target_frames < episode_bounds[0]) | (target_frames > episode_bounds[1] - 1)
-        if column in features:
-            labels = signal(column, target_frames)
-        else:
-            # Joint velocity can be derived from positions; torque must be recorded.
-            if action_branch(self.policy)[1]["quantity"] != "velocity":
-                raise ValueError(f"Dataset requires recorded {column}")
-            source = f"{action_branch(self.policy)[1]['source']}.joint"
-            joints = signal(source, target_frames)
-            next_frames = np.minimum(target_frames + self.source_fps / self.sample_hz, episode_bounds[1] - 1)
-            previous_frames = np.maximum(
-                np.minimum(target_frames, episode_bounds[1] - 1) - self.source_fps / self.sample_hz, episode_bounds[0]
-            )
-            # Forward differences, backward at the endpoint; a one-frame episode has zero velocity.
-            start_frames = np.where(
-                next_frames > np.minimum(target_frames, episode_bounds[1] - 1),
-                np.minimum(target_frames, episode_bounds[1] - 1),
-                previous_frames,
-            )
-            end_frames = np.where(
-                next_frames > np.minimum(target_frames, episode_bounds[1] - 1),
-                next_frames,
-                np.minimum(target_frames, episode_bounds[1] - 1),
-            )
-            start_values, end_values = (
-                signal(source, start_frames),
-                signal(source, end_frames),
-            )
-            dt = np.maximum((end_frames - start_frames) / self.source_fps, 1e-8)
-            labels = (end_values - start_values) / dt[:, None]
-            labels[:, [7, 15]] = joints[:, [7, 15]]
+        if column not in features:
+            raise ValueError(f"Dataset requires recorded {column}")
+        labels = signal(column, target_frames)
         sample["g2.actions"] = labels.astype(np.float32)
         return sample

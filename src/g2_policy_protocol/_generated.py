@@ -94,7 +94,7 @@ def validate_metadata_fields(payload):
             if payload['extensions']['response_mode'] not in ('full_chunk', 'variable_chunk'):
                 raise ValueError('metadata.extensions.response_mode' + " has an unsupported value")
     _object_fields(payload['action_spec'], 'metadata.action_spec', fields=('control_quantity', 'dim', 'fields', 'units', 'frame', 'ee_frame', 'representation'), required=('control_quantity', 'dim', 'fields', 'units', 'frame', 'ee_frame', 'representation'))
-    if payload['action_spec']['control_quantity'] not in ('pose_target', 'joint_position', 'joint_velocity', 'joint_torque'):
+    if payload['action_spec']['control_quantity'] not in ('pose_target', 'joint_position'):
         raise ValueError('metadata.action_spec.control_quantity' + " has an unsupported value")
     _integer(payload['action_spec']['dim'], 'metadata.action_spec.dim', minimum=1)
     _array(payload['action_spec']['fields'], 'metadata.action_spec.fields', minimum=1, maximum=None, unique=True)

@@ -55,8 +55,10 @@ def resolve_sources(data, *, base_dir):
         if not isinstance(name, str) or not name.strip():
             raise ValueError("Each source name must be a nonempty string")
         weight = entry.get("weight")
-        if "weight" in entry and (type(weight) not in (int, float) or not math.isfinite(weight) or weight <= 0):
-            raise ValueError(f"Source {name}: weight must be a finite positive number")
+        if weight != "auto" and "weight" in entry and (
+            type(weight) not in (int, float) or not math.isfinite(weight) or weight <= 0
+        ):
+            raise ValueError(f"Source {name}: weight must be 'auto' or a finite positive number")
         path = Path(value).expanduser()
         path = (root / path).resolve() if not path.is_absolute() else path.resolve()
         result.append({"name": name, "path": str(path),
@@ -64,6 +66,13 @@ def resolve_sources(data, *, base_dir):
                        "weight": weight})
     if len({source["name"] for source in result}) != len(result):
         raise ValueError("Source names must be unique")
+    if any(source["weight"] == "auto" for source in result):
+        if not all(source["weight"] == "auto" for source in result):
+            raise ValueError(
+                "Set weight: auto on all sources, omit it on all sources, or use numeric weights on all sources"
+            )
+        for source in result:
+            source["weight"] = None
     if any(source["weight"] is None for source in result) and not all(source["weight"] is None for source in result):
         raise ValueError("Set weight on all sources or omit it on all sources")
     return result

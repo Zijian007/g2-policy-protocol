@@ -241,16 +241,9 @@ def test_state_boundary_rejects_nonfinite_history_before_conversion(kind, width)
         encode_state(policy, {f"observation/{kind}": values}, "left")
 
 
-@pytest.mark.parametrize("arm", ["left", "right"])
 @pytest.mark.parametrize("quantity", ["velocity", "torque"])
-def test_single_arm_nonposition_actions_keep_other_arm_neutral_without_feedback(arm, quantity):
-    policy = resolve_policy({"action": {
-        "pose": {"enabled": False}, "joint": {"enabled": True, "quantity": quantity},
-    }}, horizon=3)
-    codec = ActionCodec(policy, arm)
-    targets = np.arange(48, dtype=np.float32).reshape(3, 16)
-    restored = codec.decode(codec.encode(targets, {}), {})
-    selected = slice(0, 8) if arm == "left" else slice(8, 16)
-    inactive = slice(8, 16) if arm == "left" else slice(0, 8)
-    np.testing.assert_array_equal(restored[:, selected], targets[:, selected])
-    np.testing.assert_array_equal(restored[:, inactive], 0)
+def test_removed_joint_quantities_are_rejected(quantity):
+    with pytest.raises(ValueError, match="policy.action.joint.quantity"):
+        resolve_policy({"action": {
+            "pose": {"enabled": False}, "joint": {"enabled": True, "quantity": quantity},
+        }}, horizon=3)

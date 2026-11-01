@@ -9,7 +9,7 @@ from g2_policy_protocol.validation import validate_rigid_transform
 SOURCES = ("state", "action")
 METHODS = ("component", "se3")
 QUANTITIES = {
-    "joint": {"position": "joint_position", "velocity": "joint_velocity", "torque": "joint_torque"},
+    "joint": {"position": "joint_position"},
     "pose": {"pose": "pose_target"},
 }
 COORDINATES = {
@@ -122,9 +122,7 @@ def validate_policy(policy):
             if spec["enabled"] and spec["delta"] and spec["reference"]["source"] == "state":
                 raise ValueError(f"policy.state.{kind} relative to source: state requires history_steps > 1")
     kind, spec = action_branch(policy)
-    quantity = _choice(spec["quantity"], QUANTITIES[kind], f"policy.action.{kind}.quantity")
-    if kind == "joint" and quantity in ("joint_velocity", "joint_torque") and spec["delta"]:
-        raise ValueError(f"policy.action.{kind}: joint velocity and torque require delta: false")
+    _choice(spec["quantity"], QUANTITIES[kind], f"policy.action.{kind}.quantity")
 
 
 def merge(base, override, path=""):

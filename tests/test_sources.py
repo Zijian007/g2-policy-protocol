@@ -22,6 +22,9 @@ def test_paths_and_legacy_configuration(tmp_path):
     {"sources": [{"path": "a", "weight": 1}, {"path": "b"}]},
     {"sources": [{"path": "a", "weight": float("nan")}]},
     {"sources": [{"path": "a", "weight": True}]},
+    {"sources": [{"path": "a", "weight": "automatic"}]},
+    {"sources": [{"path": "a", "weight": "auto"}, {"path": "b", "weight": 1}]},
+    {"sources": [{"path": "a", "weight": "auto"}, {"path": "b"}]},
     {"sources": [{"path": "a"}, {"path": "a"}]},
     {"repo_id": "../a"}, {"sources": [{"path": "a", "repo_id": "b"}]},
     {"sources": [{"path": "a"}], "image_size": [0, 224]},
@@ -42,6 +45,19 @@ def test_proportional_and_weighted_episode_mixtures():
     assert repeat_plan([[2] * 10, [3] * 10], [2.2, 1], 5) == repeat_plan([[2] * 10, [3] * 10], [2.2, 1], 5)
     with pytest.raises(IndexError):
         index.locate(24)
+
+
+def test_auto_weight_uses_natural_sample_proportions(tmp_path):
+    sources = resolve_sources(
+        {"sources": [{"path": "a", "weight": "auto"}, {"path": "b", "weight": "auto"}]},
+        base_dir=tmp_path,
+    )
+    assert [source["weight"] for source in sources] == [None, None]
+    index = MixtureIndex([[3, 3], [9, 9]], [source["weight"] for source in sources])
+    assert len(index) == 24
+    assert index.proportions == [0.25, 0.75]
+    assert [index.locate(i)[0] for i in range(len(index))].count(0) == 6
+    assert index.rows == MixtureIndex([[3, 3], [9, 9]]).rows
 
 
 def test_resize_preserves_aspect_ratio_and_dtype():

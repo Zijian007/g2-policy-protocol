@@ -39,13 +39,9 @@ def build_action_spec(control_quantity="pose_target"):
     if control_quantity == "pose_target":
         names = ["x", "y", "z"] + [f"rot6d_{i}" for i in range(6)] + ["gripper"]
         units = ["m"] * 3 + ["dimensionless"] * 6 + ["close_ratio"]
-    elif control_quantity in ("joint_position", "joint_velocity", "joint_torque"):
+    elif control_quantity == "joint_position":
         names = [f"joint_{i}" for i in range(1, 8)] + ["gripper"]
-        units = [
-            {"joint_position": "rad", "joint_velocity": "rad/s", "joint_torque": "N*m"}[
-                control_quantity
-            ]
-        ] * 7 + ["close_ratio"]
+        units = ["rad"] * 7 + ["close_ratio"]
     else:
         raise ValueError(f"unsupported control_quantity {control_quantity!r}")
     names = [f"{side}_{name}" for side in ("left", "right") for name in names]

@@ -22,7 +22,7 @@
 
 模型内部可以预测 delta、SE(3)、不同旋转表示、单臂或补齐维度；适配器必须还原到声明的完整双臂绝对控制量。协议不会传输 Pi05 token 设置、归一化参数、LoRA 或 padded action_dim=32。
 
-`data.policy.resolve_policy` 在入口解析并校验 policy 结构和数值约束；状态和动作编码入口检查数组形状及有限值，内部坐标转换不重复扫描。单臂先裁切再转换，解码后补齐另一臂的实测位置；速度和力矩补零。共享包不定义训练 YAML 或配置版本。OpenPI 的字段翻译与快照位于 `openpi.adapters.g2.training_config`，LeRobot 的字段翻译位于 `lerobot_finetune.adapters.g2.config`；它们只将已解析的 `policy` 子树交给共享数据工具。
+`data.policy.resolve_policy` 在入口解析并校验 policy 结构和数值约束；状态和动作编码入口检查数组形状及有限值，内部坐标转换不重复扫描。单臂先裁切再转换，解码后补齐另一臂的实测位置。共享包不定义训练 YAML 或配置版本。OpenPI 的字段翻译与快照位于 `openpi.adapters.g2.training_config`，LeRobot 的字段翻译位于 `lerobot_finetune.adapters.g2.config`；它们只将已解析的 `policy` 子树交给共享数据工具。
 
 ## 数据模块
 
@@ -61,7 +61,7 @@ LeRobot G2 部署配置删除 `inference.execution_steps`；`temporal_ensemble_c
 
 状态历史、图像历史、episode 起点和 command/object 参考由 wholebody 的采样时间提供。OpenPI 不再根据不均匀的推理调用缓存历史或猜测 episode 起点。两种服务共用 policy_capabilities 推导需求；缺少必要 context 会在请求边界报错。
 
-pose_target / joint_position 可由现有 wholebody 执行器处理。关节速度、力矩仅有协议/训练语义，应用没有绑定执行器时启动前拒绝。LeRobot 尚不支持 RTC；OpenPI 保留自身 RTC 实现。
+控制量仅支持 pose_target / joint_position，由现有 wholebody 执行器处理。LeRobot 尚不支持 RTC；OpenPI 保留自身 RTC 实现。
 
 ## 源码组织与定义来源
 

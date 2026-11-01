@@ -175,9 +175,7 @@
             "control_quantity": {
               "enum": [
                 "pose_target",
-                "joint_position",
-                "joint_velocity",
-                "joint_torque"
+                "joint_position"
               ]
             },
             "dim": {

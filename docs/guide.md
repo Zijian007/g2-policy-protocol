@@ -171,7 +171,7 @@ wholebody 的推理 Shell 共用 `app/policy_launcher.py`，通过 `--config` �
 
 协议校验不检查机器人动作的可达性或运动约束。动作限速、可达性和关节规划属于 G2 控制层。`control_quantity` 还必须有已绑定的执行器，否则域控在打开硬件前拒绝。
 
-当前 wholebody 只绑定 `pose_target` 和 `joint_position`；关节速度、力矩及非零 `first_target_offset_s` 在打开硬件前拒绝。执行器参数、历史采样和额外 context 的接入方式由 wholebody 维护，见 [wholebody policy 通信契约](../../wholebody/docs/dev/policy-protocol.md)。
+协议支持 `pose_target` 和 `joint_position`，wholebody 按控制量绑定执行器；非零 `first_target_offset_s` 在打开硬件前拒绝。执行器参数、历史采样和额外 context 的接入方式由 wholebody 维护，见 [wholebody policy 通信契约](../../wholebody/docs/dev/policy-protocol.md)。
 
 ## 独立验收
 

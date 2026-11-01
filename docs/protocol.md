@@ -15,7 +15,7 @@
 | rot6d | 旋转矩阵前两列按列拼接：`R[:, :2].reshape(-1, order="F")`；单位旋转为 `[1,0,0,0,1,0]` |
 | close_01 / close_ratio | 夹爪绝对闭合比例，0 开、1 闭；任何控制量下都不作差分 |
 | base_link / flange | 线上位姿的父坐标系和末端点：机器人基座坐标系下的法兰位姿 |
-| control_quantity | server 返回的动作含义：`pose_target`、`joint_position`、`joint_velocity`、`joint_torque` |
+| control_quantity | server 返回的动作含义：`pose_target`、`joint_position` |
 | H | `action_horizon`，模型一次预测的动作步数 |
 | R | 一次响应实际返回的步数，1 ≤ R ≤ H |
 | K | client 从一次响应中提交执行的步数，由 wholebody 的 `execution_steps` 决定 |
@@ -159,15 +159,13 @@ error / reset / reset_ack：
 | --- | --- | --- |
 | pose_target | 20 | xyz 米、rot6d、gripper |
 | joint_position | 16 | 7 关节 rad、gripper |
-| joint_velocity | 16 | 7 关节 rad/s、gripper |
-| joint_torque | 16 | 7 关节 N*m、gripper |
 
 字段顺序：
 
 - pose20：`left_x, left_y, left_z, left_rot6d_0…5, left_gripper`，然后右臂同样 10 个。
 - joint16：`left_joint_1…7, left_gripper`，然后 `right_joint_1…7, right_gripper`。
 
-位姿使用 base_link 下的 flange；TCP、局部参考、delta 或旋转表示由模型适配层转换。`arm` 限定实际执行侧，另一侧位置保持实测值，另一侧速度/力矩为零。
+位姿使用 base_link 下的 flange；TCP、局部参考、delta 或旋转表示由模型适配层转换。`arm` 限定实际执行侧，另一侧保持实测位置。
 
 ## 观测、历史与参考
 

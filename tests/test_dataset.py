@@ -198,14 +198,14 @@ def test_base_link_skips_arm_base_conversion():
     assert "observation/base_to_parent" not in references_from_sample(sample)
 
 
-def test_derived_velocity_clamps_to_episode_and_keeps_absolute_grippers():
+def test_joint_position_targets_clamp_to_episode_without_differencing():
     policy = resolve_policy({
-        "action": {"pose": {"enabled": False}, "joint": {"enabled": True, "quantity": "velocity"}},
+        "action": {"pose": {"enabled": False}, "joint": {"enabled": True, "quantity": "position"}},
         "timing": {"sample_hz": 4},
     }, horizon=4)
     source = Recording()
     sample = TemporalDataset(source, policy, (), 4).sample(2, images=False)
-    np.testing.assert_allclose(sample["g2.actions"][:, 0], 4)
+    np.testing.assert_allclose(sample["g2.actions"][:, 0], [12, 13, 13, 13])
     np.testing.assert_allclose(sample["g2.actions"][:, 7], [12, 13, 13, 13])
     np.testing.assert_array_equal(sample["g2.action_is_pad"], [False, False, True, True])
     assert all(count == 1 for count in source.hf_dataset.reads.values())

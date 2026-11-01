@@ -12,7 +12,7 @@ import pytest
 from g2_policy_protocol import codec
 from g2_policy_protocol import protocol as p
 
-QUANTITIES = ('pose_target', 'joint_position', 'joint_velocity', 'joint_torque')
+QUANTITIES = ('pose_target', 'joint_position')
 
 
 def metadata(quantity='pose_target', **kwargs):
@@ -116,11 +116,12 @@ def test_unknown_response_mode_is_rejected_during_handshake():
         p.build_metadata(policy_hz=30, extensions={"response_mode": "full_chunck"})
 
 
-def test_removed_twist_is_rejected_by_action_spec_metadata_and_json_schema():
+@pytest.mark.parametrize('quantity', ['eef_twist', 'joint_velocity', 'joint_torque'])
+def test_removed_control_quantities_are_rejected_by_action_spec_metadata_and_json_schema(quantity):
     with pytest.raises(ValueError, match='unsupported control_quantity'):
-        p.build_action_spec('eef_twist')
+        p.build_action_spec(quantity)
     meta = metadata()
-    meta['action_spec']['control_quantity'] = 'eef_twist'
+    meta['action_spec']['control_quantity'] = quantity
     with pytest.raises(ValueError, match='unsupported value'):
         p.validate_metadata(meta)
     root = Path(__file__).resolve().parents[1]
