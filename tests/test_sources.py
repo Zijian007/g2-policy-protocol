@@ -69,3 +69,10 @@ def test_resize_preserves_aspect_ratio_and_dtype():
     floating = resize_rgb(image.astype(np.float32) / 255, (8, 8))
     np.testing.assert_array_equal(floating, result / 255)
     assert image_size({"image_size": [8, 8]}) == (8, 8)
+
+
+def test_resize_mode_stretches_without_padding():
+    image = np.full((10, 20, 3), 200, np.uint8)
+    stretched = resize_rgb(image, (8, 8), "resize")
+    assert stretched.shape == (8, 8, 3) and stretched.min() == 200
+    assert resize_rgb(image, (8, 8)).min() == 0  # letterbox pads with black

@@ -8,13 +8,8 @@ import pytest
 from scipy.spatial.transform import Rotation
 
 from g2_policy_protocol.data.dataset import TemporalDataset, references_from_sample
-from g2_policy_protocol.data.encoding import (
-    ActionCodec,
-    encode_state,
-    matrix_pose,
-    pose_matrix,
-    rotation_matrix,
-)
+from g2_policy_protocol.data.encoding import ActionCodec, encode_state
+from g2_policy_protocol.data.geometry import matrix_to_pose, pose_to_matrix, rotation_to_matrix
 from g2_policy_protocol.data.policy import resolve_policy
 
 
@@ -35,7 +30,7 @@ class Recording:
             transform = np.eye(4)
             transform[:3, :3] = Rotation.from_rotvec([0, 0, index * 0.2]).as_matrix()
             transform[0, 3] = index
-            pose = np.tile(matrix_pose(transform, 0.4), 2).astype(np.float32)
+            pose = np.tile(matrix_to_pose(transform, 0.4), 2).astype(np.float32)
             command = pose.copy()
             command[[0, 10]] += 10
             rows.append({
@@ -45,7 +40,7 @@ class Recording:
                 "action.joint": np.full(16, index + 10, np.float32),
                 "reference.object_pose": pose.copy(),
                 "reference.object_joint": np.full(16, index - 1, np.float32),
-                "state.arm_base": matrix_pose(transform, 0)[:9],
+                "state.arm_base": matrix_to_pose(transform, 0)[:9],
                 "observation.images.head_color": np.full((2, 2, 3), index, np.uint8),
             })
         self.hf_dataset = Rows(rows)
@@ -104,7 +99,7 @@ def test_fractional_pose_references_restore_labels(reference):
     sample = TemporalDataset(source, policy, (), 3).sample(3, images=False)
     observation = references_from_sample(sample)
     np.testing.assert_allclose(sample["state.pose"][0], 1.5)
-    np.testing.assert_allclose(rotation_matrix(sample["state.pose"][3:9]),
+    np.testing.assert_allclose(rotation_to_matrix(sample["state.pose"][3:9]),
                                Rotation.from_rotvec([0, 0, 0.3]).as_matrix(), atol=1e-6)
     expected_reference = {"state": 1.5, "action": 11.5}[reference]
     np.testing.assert_allclose(encode_state(policy, observation)[0], 1.0 - expected_reference)
@@ -143,14 +138,14 @@ def test_arm_base_is_interpolated_even_with_a_separate_state_frame(index, positi
         "timing": {"sample_hz": 8},
     }, horizon=2)
     sample = TemporalDataset(Recording(), policy, (), 2).sample(index, images=False)
-    transform = np.linalg.inv(sample["reference.base_to_parent"])
+    transform = np.linalg.inv(sample["g2.base_to_parent"])
     np.testing.assert_allclose(transform[0, 3], position)
     np.testing.assert_allclose(transform[:3, :3], Rotation.from_rotvec([0, 0, position * 0.2]).as_matrix(), atol=1e-6)
 
 
 @pytest.mark.parametrize("arm", ["both", "left", "right"])
-@pytest.mark.parametrize("method", [None, "component", "se3"])
-@pytest.mark.parametrize("scope", ["chunk", "step"])
+@pytest.mark.parametrize("method,scope", [(None, None), ("component", "chunk"), ("component", "step"),
+                                          ("se3", "chunk"), ("se3", "step")])
 def test_moving_waist_uses_current_frame_for_history_and_entire_chunk(arm, method, scope):
     pose = {
         "coordinates": {"parent_frame": "arm_base_link"},
@@ -175,7 +170,7 @@ def test_moving_waist_uses_current_frame_for_history_and_entire_chunk(arm, metho
     state = encode_state(policy, observation, arm, flatten=False)
     selected = slice(None) if arm == "both" else slice(0, 10) if arm == "left" else slice(10, 20)
     expected = np.concatenate([
-        matrix_pose(parent @ pose_matrix(sample["g2.pose_history"][:, offset:offset + 10]),
+        matrix_to_pose(parent @ pose_to_matrix(sample["g2.pose_history"][:, offset:offset + 10]),
                     sample["g2.pose_history"][:, offset + 9])
         for offset in (0, 10)
     ], axis=-1)
@@ -189,12 +184,12 @@ def test_moving_waist_uses_current_frame_for_history_and_entire_chunk(arm, metho
         np.testing.assert_allclose(restored[:, other], np.tile(sample["state.pose"][other], (4, 1)))
     source.hf_dataset.rows[3]["state.arm_base"][:] = 100
     updated = dataset.sample(3, images=False)
-    np.testing.assert_allclose(updated["reference.base_to_parent"], sample["reference.base_to_parent"])
+    np.testing.assert_allclose(updated["g2.base_to_parent"], sample["g2.base_to_parent"])
 
 
 def test_base_link_skips_arm_base_conversion():
     sample = TemporalDataset(Recording(), resolve_policy({}, horizon=2), (), 2).sample(1, images=False)
-    assert "reference.base_to_parent" not in sample
+    assert "g2.base_to_parent" not in sample
     assert "observation/base_to_parent" not in references_from_sample(sample)
 
 

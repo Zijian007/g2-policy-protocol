@@ -7,7 +7,6 @@ its own installed .venv. Run this with lerobot-finetune/.venv/bin/python.
 import argparse
 import asyncio
 import hashlib
-import importlib.metadata
 import itertools
 import json
 import subprocess
@@ -113,6 +112,7 @@ async def serve_worker(args):
 
 def check_stack(args):
     import numpy as np
+    from g2_policy_protocol.images import encode_jpeg
 
     sys.path.insert(0, str(args.stack_root))
     from wholebody.external_services.policy.runtime.execution import execution_plan
@@ -198,9 +198,11 @@ def check_stack(args):
                         if "joint_history" in keys:
                             context["joint_history"] = np.tile(joint, (2, 1))
                         size = metadata["image_sizes"]["head_color"]
-                        context["image_history"] = {
-                            "head_color": np.full((2, *size, 3), 128, np.uint8)
-                        }
+                        frame = np.full((*size, 3), 128, np.uint8)
+                        context["image_history"] = {"head_color": (
+                            [encode_jpeg(frame)] * history if metadata["image_encoding"] == "jpeg"
+                            else np.repeat(frame[None], history, axis=0)
+                        )}
                     request = {
                         "task": "stack validation",
                         "pose": pose,
@@ -243,7 +245,6 @@ def check_stack(args):
         json.dumps(
             {
                 "passed": len(results),
-                "protocol_package": importlib.metadata.version("g2-policy-protocol"),
                 "stack_manifest": manifest,
                 "cases": results,
             },

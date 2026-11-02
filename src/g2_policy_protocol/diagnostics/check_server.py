@@ -4,39 +4,30 @@ import argparse
 import json
 import time
 from pathlib import Path
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import numpy as np
 from websockets.sync.client import connect
 
-from . import codec
-from . import protocol as p
+from .. import codec
+from .. import protocol as p
 from .samples import load_sample, prepare_images, synthetic_context, synthetic_sample
-
-
-def connection_uri(uri, encoding):
-    parts = urlsplit(uri)
-    if parts.scheme not in ("ws", "wss") or not parts.netloc:
-        raise ValueError("URL must start with ws:// or wss:// and include a host")
-    query = dict(parse_qsl(parts.query))
-    query["encoding"] = encoding
-    return urlunsplit(parts._replace(query=urlencode(query)))
 
 
 def check_connection(uri, encoding, sample, *, requests=2, timeout=30,
                      policy_hz=None, rtc=False, semantic_checks=True):
     result = {"encoding": encoding, "status": "failed", "requests": [], "warnings": []}
     try:
-        with connect(connection_uri(uri, encoding), compression=None, max_size=None,
+        with connect(codec.connection_uri(uri, encoding), compression=None, max_size=None,
                      open_timeout=timeout) as ws:
             metadata = codec.loads(ws.recv(timeout=timeout), encoding=encoding)
             p.validate_metadata(metadata, policy_hz=policy_hz, require_rtc=rtc)
             result["metadata"] = metadata
-            images = prepare_images(sample, metadata)
             context = (
                 synthetic_context(sample, metadata)
                 if sample["provenance"].startswith("synthetic;") else None
             )
+            images = (None if context is not None and "image_history" in context
+                      else prepare_images(sample, metadata))
             if metadata["requires_joint_state"] and "joint_state" not in sample:
                 raise ValueError("server requires joint_state but sample does not contain it")
             previous = None

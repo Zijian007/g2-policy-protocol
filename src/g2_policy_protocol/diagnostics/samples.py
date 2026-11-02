@@ -3,10 +3,9 @@
 from pathlib import Path
 
 import numpy as np
-from PIL import Image
 
-from . import protocol as p
-from .images import encode_jpeg
+from .. import protocol as p
+from ..images import encode_jpeg, resize_rgb
 
 
 def synthetic_sample():
@@ -77,38 +76,28 @@ def load_sample(path):
 def prepare_images(sample, metadata):
     """Prepare only required cameras: resize/letterbox, then JPEG when negotiated."""
     result = {}
-    bilinear = Image.Resampling.BILINEAR
     for camera in metadata["required_cameras"]:
         if camera not in sample["images"]:
             raise ValueError(f"sample missing required camera: {camera}")
         image = sample["images"][camera]
         target = metadata["image_sizes"].get(camera)
-        if target is not None and tuple(image.shape[:2]) != tuple(target):
-            height, width = target
-            source = Image.fromarray(image)
-            if metadata["image_resize"] == "letterbox":
-                ratio = min(height / image.shape[0], width / image.shape[1])
-                h, w = max(1, int(image.shape[0] * ratio)), max(1, int(image.shape[1] * ratio))
-                resized = np.asarray(source.resize((w, h), resample=bilinear))
-                image = np.zeros((height, width, 3), dtype=np.uint8)
-                y, x = (height - h) // 2, (width - w) // 2
-                image[y:y + h, x:x + w] = resized
-            else:
-                image = np.asarray(source.resize((width, height), resample=bilinear))
+        if target is not None:
+            image = resize_rgb(image, target, metadata["image_resize"])
         result[camera] = encode_jpeg(image) if metadata["image_encoding"] == "jpeg" else image
     return result
 
 
 def synthetic_context(sample, metadata):
     """Repeat fixture values for protocol diagnostics only; never a robot history provider."""
-    spec = metadata["observation_spec"]
+    observation = metadata["observation_spec"]
     result = {}
-    for key in spec["context_keys"]:
+    for key in observation["context_keys"]:
         if key == "image_history":
-            raw = prepare_images(sample, {**metadata, "image_encoding": "raw"})
+            prepared = prepare_images(sample, metadata)
             result[key] = {
-                camera: np.repeat(image[None], spec["history_steps"], axis=0)
-                for camera, image in raw.items()
+                camera: ([image] * observation["history_steps"] if metadata["image_encoding"] == "jpeg"
+                         else np.repeat(image[None], observation["history_steps"], axis=0))
+                for camera, image in prepared.items()
             }
         elif key == "base_to_parent":
             result[key] = np.eye(4)
@@ -117,6 +106,6 @@ def synthetic_context(sample, metadata):
                 value = sample["state"]
             else:
                 value = sample["joint_state"] if "joint_state" in sample else np.zeros(p.JOINT_DIM, np.float32)
-            result[key] = np.tile(value, (spec["history_steps"], 1)) if key.endswith("_history") else value
+            result[key] = np.tile(value, (observation["history_steps"], 1)) if key.endswith("_history") else value
     return result
 

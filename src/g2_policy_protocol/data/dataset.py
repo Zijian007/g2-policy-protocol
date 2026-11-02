@@ -6,49 +6,43 @@ from functools import cache, partial
 import numpy as np
 from scipy.spatial.transform import Rotation, Slerp
 
-from . import encoding
-from .policy import action_branch
+from .._constants import JOINT_DIM, POSE_ARM_DIM, POSE_DIM
+from .geometry import ROTATION_WIDTHS, matrix_to_rotation, rotation_to_matrix, xyz_rot6d_to_matrix
+from .policy import KINDS, active_action, command_reference_kinds, uses_arm_base, uses_kind
+
+_ROT6D_WIDTH = ROTATION_WIDTHS["rot6d"]
+# state.arm_base: pose of arm_base_link in base_link, xyz + rot6d (no gripper).
+_ARM_BASE_DIM = 3 + _ROT6D_WIDTH
+_COLUMN_WIDTHS = {
+    "state.arm_base": _ARM_BASE_DIM,
+    "state.pose": POSE_DIM,
+    "action.pose": POSE_DIM,
+    "state.joint": JOINT_DIM,
+    "action.joint": JOINT_DIM,
+}
 
 
 def action_label_column(policy):
-    kind, spec = action_branch(policy)
-    suffix = {"pose": "pose", "position": "joint"}[spec["quantity"]]
-    return f"{spec['source']}.{suffix}"
+    """Disk column that holds the training action labels."""
+    kind, branch = active_action(policy)
+    return f"{branch['source']}.{kind}"
 
 
 def validate_dataset_contract(features, info, policy, cameras):
-    state, action = policy["state"], policy["action"]
-    required = set(cameras)
-    if state["pose"]["enabled"] or action["pose"]["enabled"]:
-        required.add("state.pose")
-    if state["joint"]["enabled"] or action["joint"]["enabled"]:
-        required.add("state.joint")
-    column = action_label_column(policy)
-    kind, spec = action_branch(policy)
-    required.add(column)
-    for group in ("state", "action"):
-        for branch, disk in (("pose", "action.pose"), ("joint", "action.joint")):
-            item = policy[group][branch]
-            if item["enabled"] and item["delta"] and item["reference"]["source"] == "action":
-                required.add(disk)
-    if any(
-        item["enabled"] and item["coordinates"]["parent_frame"] == "arm_base_link"
-        for item in (state["pose"], action["pose"])
-    ):
+    """Check that a LeRobot dataset records everything the policy needs, in the expected frames."""
+    action = policy["action"]
+    _, label_branch = active_action(policy)
+    required = {*cameras, action_label_column(policy)}
+    required |= {f"state.{kind}" for kind in KINDS if uses_kind(policy, kind)}
+    required |= {f"action.{kind}" for kind in command_reference_kinds(policy)}
+    if uses_arm_base(policy):
         required.add("state.arm_base")
     missing = required - features.keys()
     if missing:
         raise ValueError(f"G2 dataset is missing required columns: {sorted(missing)}")
-    dimensions = {
-        "state.arm_base": 9,
-        "state.pose": 20,
-        "action.pose": 20,
-        "state.joint": 16,
-        "action.joint": 16,
-    }
-    for key in required & dimensions.keys():
-        if "shape" in features[key] and tuple(features[key]["shape"]) != (dimensions[key],):
-            raise ValueError(f"G2 dataset {key} must have shape [{dimensions[key]}]")
+    for key in required & _COLUMN_WIDTHS.keys():
+        if "shape" in features[key] and tuple(features[key]["shape"]) != (_COLUMN_WIDTHS[key],):
+            raise ValueError(f"G2 dataset {key} must have shape [{_COLUMN_WIDTHS[key]}]")
     if "fps" in info:
         fps = info["fps"]
         if type(fps) not in (int, float) or not math.isfinite(fps) or fps <= 0:
@@ -59,16 +53,14 @@ def validate_dataset_contract(features, info, policy, cameras):
             raise ValueError(f"Dataset wholebody_export.{field}={exported[field]!r} must match {expected!r}")
     pose_frame = exported.get("pose_frame", "base_link")
     action_parent = exported.get("action_parent_frame", pose_frame)
-    uses_pose = state["pose"]["enabled"] or action["pose"]["enabled"]
-    if uses_pose and pose_frame != "base_link":
+    if uses_kind(policy, "pose") and pose_frame != "base_link":
         raise ValueError(f"Dataset wholebody_export.pose_frame={pose_frame!r} must be 'base_link'")
-    needs_command_pose = any(
-        item["enabled"] and item["delta"] and item["reference"]["source"] == "action"
-        for item in (state["pose"], action["pose"])
-    ) or (action["pose"]["enabled"] and action["pose"]["source"] == "action")
-    if needs_command_pose and action_parent != "base_link":
+    reads_command_pose = "pose" in command_reference_kinds(policy) or (
+        action["pose"]["enabled"] and action["pose"]["source"] == "action"
+    )
+    if reads_command_pose and action_parent != "base_link":
         raise ValueError(f"Dataset wholebody_export.action_parent_frame={action_parent!r} must be 'base_link'")
-    if spec["source"] == "action" and exported.get("action_supervision", "command") != "command":
+    if label_branch["source"] == "action" and exported.get("action_supervision", "command") != "command":
         raise ValueError("Dataset wholebody_export.action_supervision must match action labels")
     if exported.get("segment_policy") == "concatenated":
         raise ValueError("Dataset concatenates capture segments; export separate continuous episodes")
@@ -83,7 +75,7 @@ def references_from_sample(sample):
         "g2.joint_history": "joint_history",
         "g2.command_pose": "command_pose",
         "g2.command_joint": "command_joint",
-        "reference.base_to_parent": "base_to_parent",
+        "g2.base_to_parent": "base_to_parent",
     }
     return {
         f"observation/{target}": np.asarray(sample[source]) for source, target in sources.items() if source in sample
@@ -103,23 +95,10 @@ class TemporalDataset:
         self.source_fps = float(dataset.meta.fps)
         self.sample_hz = float(policy["timing"]["sample_hz"])
         self.action_indices = np.arange(horizon) if action_indices is None else np.asarray(action_indices)
-        state, action = policy["state"], policy["action"]
-        self.state_modalities = tuple(kind for kind in ("pose", "joint") if state[kind]["enabled"])
-        self.state_columns = []
-        self.reference_columns = []
-        for kind in ("pose", "joint"):
-            state_enabled = state[kind]["enabled"]
-            action_enabled = action[kind]["enabled"]
-            if not (state_enabled or action_enabled):
-                continue
-            self.state_columns.append(f"state.{kind}")
-            active_specs = ([state[kind]] if state_enabled else []) + ([action[kind]] if action_enabled else [])
-            if any(spec["delta"] and spec["reference"]["source"] == "action" for spec in active_specs):
-                self.reference_columns.append((f"g2.command_{kind}", f"action.{kind}"))
-        if any(
-            spec["enabled"] and spec["coordinates"]["parent_frame"] == "arm_base_link"
-            for spec in (state["pose"], action["pose"])
-        ):
+        self.state_modalities = tuple(kind for kind in KINDS if policy["state"][kind]["enabled"])
+        self.state_columns = [f"state.{kind}" for kind in KINDS if uses_kind(policy, kind)]
+        self.reference_columns = [(f"g2.command_{kind}", f"action.{kind}") for kind in command_reference_kinds(policy)]
+        if uses_arm_base(policy):
             self.state_columns.append("state.arm_base")
         self.anchor_frames = []
         self.episode_bounds = []
@@ -152,11 +131,11 @@ class TemporalDataset:
             fraction = clamped_frame - lower_frame
             value = start_values * (1 - fraction) + end_values * fraction
             if key in ("state.pose", "action.pose", "state.arm_base"):
-                for offset in (0,) if key == "state.arm_base" else (0, 10):
-                    rotations = encoding.rotation_matrix(
-                        np.stack([start_values[offset + 3 : offset + 9], end_values[offset + 3 : offset + 9]])
-                    )
-                    value[offset + 3 : offset + 9] = encoding.rotation_vector(
+                # Rotations interpolate on SO(3), not component-wise.
+                for offset in (0,) if key == "state.arm_base" else (0, POSE_ARM_DIM):
+                    rot6d = slice(offset + 3, offset + 3 + _ROT6D_WIDTH)
+                    rotations = rotation_to_matrix(np.stack([start_values[rot6d], end_values[rot6d]]))
+                    value[rot6d] = matrix_to_rotation(
                         Slerp([0, 1], Rotation.from_matrix(rotations))([fraction]).as_matrix()[0]
                     )
             samples.append(value)
@@ -186,8 +165,8 @@ class TemporalDataset:
             if key in features:
                 sample[key] = signal(key, [anchor_frame])[0]
         if "state.arm_base" in self.state_columns:
-            arm_base = np.append(sample["state.arm_base"], 0)
-            sample["reference.base_to_parent"] = np.linalg.inv(encoding.pose_matrix(arm_base))
+            # base_to_parent is T_armbase←base: the inverse of the recorded arm base pose.
+            sample["g2.base_to_parent"] = np.linalg.inv(xyz_rot6d_to_matrix(sample["state.arm_base"]))
         history = anchor_frame + np.arange(1 - timing["history_steps"], 1) * self.source_fps / self.sample_hz
         for kind in self.state_modalities:
             key = f"state.{kind}"

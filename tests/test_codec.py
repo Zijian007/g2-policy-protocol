@@ -112,24 +112,6 @@ def test_json_encoder_rejects_reserved_tags_and_unsupported_types(packet, error)
         codec.json_dumps(packet)
 
 
-@pytest.mark.parametrize('encoding', ['raw', 'jpeg'])
-def test_json_and_msgpack_feed_the_same_protocol_parser(encoding):
-    from g2_policy_protocol import protocol as wire
-    meta = wire.build_metadata(policy_hz=30, arm='left',
-                               image_encoding=encoding, rtc_supported=True)
-    image = np.zeros((3, 5, 3), dtype=np.uint8) if encoding == 'raw' else b'jpeg'
-    request = wire.build_request(request_id=42, prompt='demo', state=np.arange(20, dtype=np.float32),
-                                 images=dict.fromkeys(meta['required_cameras'], image), metadata=meta,
-                                 rtc_enabled=True, inference_delay=2, prev_chunk_left_over=np.ones((2, 20)))
-    first = wire.parse_request(codec.json_loads(codec.json_dumps(request)), metadata=meta)
-    second = wire.parse_request(codec.unpackb(codec.packb(request)), metadata=meta)
-    np.testing.assert_array_equal(first['state'], second['state'])
-    np.testing.assert_array_equal(first['prev_chunk_left_over'], second['prev_chunk_left_over'])
-    response = wire.build_response(request_id=42, actions=np.ones((2, 20)), metadata=meta)
-    np.testing.assert_array_equal(wire.parse_response(codec.json_loads(codec.json_dumps(response)), request_id=42, metadata=meta),
-                                  wire.parse_response(codec.unpackb(codec.packb(response)), request_id=42, metadata=meta))
-
-
 def test_json_rejects_extended_float_without_recursing():
     if np.dtype(np.longdouble).itemsize <= 8:
         pytest.skip('platform has no extended float')

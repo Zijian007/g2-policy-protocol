@@ -4,17 +4,17 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "g2-policy-protocol"
-version = "0.7.0"
+version = "0.7.0"  # 固定不变：两端以 git pull 同步，不靠包版本区分
 description = "Model-neutral G2 communication contracts and robot data semantics"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = ["numpy>=1.24", "msgpack>=1.0", "scipy>=1.11", "websockets>=12", "Pillow>=9.1"]
 
 [project.scripts]
-g2-policy-check = "g2_policy_protocol.check_server:main"
+g2-policy-check = "g2_policy_protocol.diagnostics.check_server:main"
 
 [dependency-groups]
-dev = ["pytest>=7", "jsonschema>=4"]
+dev = ["pytest>=7"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -22,6 +22,3 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
-
-[tool.setuptools.package-data]
-g2_policy_protocol = ["g2.schema.json"]

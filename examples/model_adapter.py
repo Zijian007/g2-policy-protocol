@@ -2,18 +2,15 @@
 
 import numpy as np
 from g2_policy_protocol import protocol
-from g2_policy_protocol.data.encoding import (
-    ActionCodec,
-    rotation_matrix,
-    rotation_vector,
-)
+from g2_policy_protocol.data.encoding import ActionCodec
+from g2_policy_protocol.data.geometry import matrix_to_rotation, rotation_to_matrix
 from g2_policy_protocol.data.policy import resolve_policy
 
 if __name__ == "__main__":
     # Reorder a robot's wxyz quaternion explicitly; shared geometry uses xyzw.
     quaternion_wxyz = np.array([2**-0.5, 0, 0, 2**-0.5])
     quaternion_xyzw = quaternion_wxyz[[1, 2, 3, 0]]
-    rot6d = rotation_vector(rotation_matrix(quaternion_xyzw, "quaternion"))
+    rot6d = matrix_to_rotation(rotation_to_matrix(quaternion_xyzw, "quaternion"))
     measured_pose = np.zeros(20, dtype=np.float32)
     measured_pose[:3] = [0.35, 0.2, 0.5]
     measured_pose[10:13] = [0.35, -0.2, 0.5]

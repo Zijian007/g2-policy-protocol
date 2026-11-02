@@ -8,19 +8,18 @@ import functools
 import json
 import math
 from collections.abc import Mapping
+from urllib.parse import parse_qs, parse_qsl, urlencode, urlsplit, urlunsplit
 
 import msgpack
 import numpy as np
 
-from ._generated import (
-    ENCODING_VALUES,
-    IMAGE_CHANNELS,
-    IMAGE_DTYPE,
-    IMAGE_MIN_HW,
-    IMAGE_NDIM,
-)
+from ._constants import ENCODING_VALUES
 
-_RAW_IMAGE_DTYPE = np.dtype(IMAGE_DTYPE)
+# Raw images are uint8 RGB (H, W, 3) with H, W >= 1.
+_RAW_IMAGE_DTYPE = np.dtype(np.uint8)
+IMAGE_NDIM = 3
+IMAGE_CHANNELS = 3
+IMAGE_MIN_HW = (1, 1)
 
 
 def _dtype(value) -> np.dtype:
@@ -170,27 +169,38 @@ def validate_image(value, *, encoding: str):
     return value
 
 
-def dumps(message, *, encoding='msgpack'):
+def dumps(message, *, encoding="msgpack"):
     """Encode one connection frame; the encoding is fixed at connect time."""
-    if encoding == 'msgpack':
+    if encoding == "msgpack":
         return packb(message)
-    if encoding == 'json':
+    if encoding == "json":
         return json_dumps(message)
-    raise ValueError(f'unsupported encoding: {encoding!r}')
+    raise ValueError(f"unsupported encoding: {encoding!r}")
 
 
-def loads(frame, *, encoding='msgpack'):
-    if encoding == 'msgpack' and isinstance(frame, bytes):
+def loads(frame, *, encoding="msgpack"):
+    if encoding == "msgpack" and isinstance(frame, bytes):
         return unpackb(frame)
-    if encoding == 'json' and isinstance(frame, str):
+    if encoding == "json" and isinstance(frame, str):
         return json_loads(frame)
-    raise ValueError('frame type does not match connection encoding')
+    raise ValueError("frame type does not match connection encoding")
+
+
+def connection_uri(uri, encoding):
+    """Clients select the connection encoding with ?encoding=..., keeping other query keys."""
+    parts = urlsplit(uri)
+    if parts.scheme not in ("ws", "wss") or not parts.netloc:
+        raise ValueError("URL must start with ws:// or wss:// and include a host")
+    if encoding not in ENCODING_VALUES:
+        raise ValueError("encoding must be json or msgpack")
+    query = dict(parse_qsl(parts.query))
+    query["encoding"] = encoding
+    return urlunsplit(parts._replace(query=urlencode(query)))
 
 
 def encoding_from_path(path):
     """Servers use ?encoding=json; existing no-query connections use msgpack."""
-    from urllib.parse import parse_qs, urlsplit
-    values = parse_qs(urlsplit(path).query).get('encoding', ['msgpack'])
+    values = parse_qs(urlsplit(path).query).get("encoding", ["msgpack"])
     if len(values) != 1 or values[0] not in ENCODING_VALUES:
-        raise ValueError('encoding must be json or msgpack')
+        raise ValueError("encoding must be json or msgpack")
     return values[0]

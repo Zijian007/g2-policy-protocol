@@ -1,6 +1,6 @@
 # G2 训练 policy 字段速查
 
-[文档入口](../README.md#文档导航) · [开发维护](development.md#职责划分) · [v3 协议](protocol.md)
+[README](../README.md) · [职责划分](../README.md#职责划分) · [通信协议](protocol.md)
 
 LeRobot 和 OpenPI 使用同一套 `policy.state/action/timing`，约定如何把机器人观测和示教目标编码成模型输入与训练标签，并在部署时还原输出。训练 YAML 外层、配置版本和 checkpoint 格式由各模型仓库维护，见 [OpenPI 训练配置](../../openpi/scripts/g2/docs/training.md) 和 [LeRobot 训练配置](../../lerobot-finetune/scripts/g2/docs/training.md)。候选值与组合约束由 [data/policy.py](../src/g2_policy_protocol/data/policy.py) 校验。
 
@@ -230,7 +230,7 @@ coordinates:
 
 ## 多数据集与图像尺寸
 
-训练 YAML 的 `data` 支持以下写法，需要 `g2-policy-protocol==0.7.0` 及配套训练/部署代码。外层 `schema_version` 由模型仓库维护：当前 OpenPI 使用 v8，LeRobot 使用 v7；它们均独立于通信协议版本 `g2.policy.v3`。
+训练 YAML 的 `data` 支持以下写法；OpenPI 与 LeRobot 的训练 YAML 段落结构一致。
 
 以下路径以 OpenPI 的 LeRobot v2.1 数据为例；lerobot-finetune 使用 v3，需换成对应数据目录。
 
@@ -262,3 +262,9 @@ data:
 权重、实际生效的 policy 和归一化统计量共同确定模型输出的含义。训练保存配置快照，部署按该快照恢复语义和统计量；修改当前训练 YAML 不会改变已有 checkpoint 的语义。快照位置与格式由各模型仓库维护。
 
 模型内部可以采用单臂、delta、TCP 或不同旋转编码，通信位姿仍按 base_link 下的 flange/rot6d 绝对目标传输；握手声明所需观测与上下文。参考由当前请求或其历史提供，服务端不依赖调用次数猜测参考。RTC 前缀也经同一套动作编码处理，客户端不重复作差或归一化。
+
+## 连续段与监督
+
+wholebody 把一次开录到停录导出为一个 episode：多个连续 segment 分别重采样后按顺序合入，暂停区间不补帧，详见 [wholebody 导出文档](../../wholebody/docs/user/collect/export.md)。导出固定 `action_supervision: command`，不把 state 改名为 action；需要测量监督时用 `policy.action.pose.source: state`（或 `joint.source: state`）选择，旧的 `action_supervision: state` 导出会被拒绝。
+
+两个训练入口都调用 `validate_dataset_contract`，检查所需列、向量维度、fps、已声明的 base_link / flange / rot6d 和监督方式，并拒绝显式声明 `segment_policy: concatenated` 的数据。它不会从缺省字段识别暂停拼接点，`TemporalDataset` 也只按 episode 边界裁切，所以时序窗口可能跨越同一 episode 内的片段连接处；用多片段录制训练前需自行确认连续性。

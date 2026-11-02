@@ -3,13 +3,14 @@
 import asyncio
 import runpy
 from pathlib import Path
-from types import SimpleNamespace
 
 import numpy as np
 import pytest
 from g2_policy_protocol import protocol as p
-from g2_policy_protocol.check_server import check_action_semantics, connection_uri
-from g2_policy_protocol.samples import (
+from g2_policy_protocol.images import decode_image_history
+from g2_policy_protocol.diagnostics.check_server import check_action_semantics
+from g2_policy_protocol.codec import connection_uri
+from g2_policy_protocol.diagnostics.samples import (
     load_sample,
     prepare_images,
     save_sample,
@@ -62,6 +63,14 @@ def test_image_preparation_and_decode(encoding, resize):
         assert image[0, 50].max() < 10
 
 
+def test_corrupt_jpeg_is_rejected_as_invalid_request():
+    from g2_policy_protocol.images import decode_images
+
+    meta = p.build_metadata(policy_hz=30, required_cameras=["head_color"], image_encoding="jpeg")
+    with pytest.raises(ValueError, match="failed to decode"):
+        decode_images({"head_color": b"not a jpeg"}, meta)
+
+
 def test_missing_camera():
     sample = synthetic_sample()
     del sample["images"]["hand_right_color"]
@@ -70,7 +79,7 @@ def test_missing_camera():
 
 
 def test_empty_synthetic_context_does_not_read_or_prepare_sample(monkeypatch):
-    from g2_policy_protocol import samples
+    from g2_policy_protocol.diagnostics import samples
 
     def unexpected(*args, **kwargs):
         pytest.fail("unrequested context must not prepare images")
@@ -81,7 +90,7 @@ def test_empty_synthetic_context_does_not_read_or_prepare_sample(monkeypatch):
 
 
 def test_vector_synthetic_context_does_not_prepare_images(monkeypatch):
-    from g2_policy_protocol import samples
+    from g2_policy_protocol.diagnostics import samples
 
     def unexpected(*args, **kwargs):
         pytest.fail("vector context must not prepare images")
@@ -105,11 +114,13 @@ def test_vector_synthetic_context_does_not_prepare_images(monkeypatch):
     np.testing.assert_array_equal(context["base_to_parent"], np.eye(4))
 
 
-def test_synthetic_image_history_uses_negotiated_cameras_and_size():
+@pytest.mark.parametrize('image_encoding', ['raw', 'jpeg'])
+def test_synthetic_image_history_uses_negotiated_cameras_and_size(image_encoding):
     meta = p.build_metadata(
 
         policy_hz=30,
         required_cameras=["head_color"],
+        image_encoding=image_encoding,
         image_sizes={"head_color": [8, 10]},
         observation_spec=dict(
             pose=False, joint=False, prompt=False, history_steps=2, history_hz=30, context_keys=["image_history"]
@@ -120,8 +131,13 @@ def test_synthetic_image_history_uses_negotiated_cameras_and_size():
     assert set(context) == {"image_history"}
     assert set(context["image_history"]) == {"head_color"}
     history = context["image_history"]["head_color"]
+    if image_encoding == 'jpeg':
+        assert isinstance(history, list) and len(history) == 2
+        assert history[0] == history[1] == prepare_images(sample, meta)['head_color']
+        history = decode_image_history(context['image_history'], meta)['head_color']
+    else:
+        np.testing.assert_array_equal(history[0], prepare_images(sample, meta)["head_color"])
     assert history.shape == (2, 8, 10, 3) and history.dtype == np.uint8
-    np.testing.assert_array_equal(history[0], prepare_images(sample, meta)["head_color"])
     np.testing.assert_array_equal(history[0], history[1])
 
 
@@ -162,61 +178,44 @@ def test_model_adapter_example_uses_shared_conventions():
 @pytest.mark.parametrize("encoding", ["msgpack", "json"])
 @pytest.mark.parametrize("outcome", ["success", "inference_error", "invalid_request"])
 def test_policy_instance_request_response(encoding, outcome):
-    from g2_policy_protocol import codec
+    from conftest import FakeConnection
+    from g2_policy_protocol.server import PolicyServer
 
     example = runpy.run_path(str(Path(__file__).resolve().parents[1] / "examples/minimal_server.py"))
     meta = p.build_metadata(policy_hz=30, action_horizon=2, required_cameras=["head_color"])
     sample = synthetic_sample()
+    image = sample["images"]["head_color"][:8, :12].copy()
     seen = []
 
     class RecordingPolicy(example["MockPolicy"]):
         def infer(self, observation):
             seen.append(observation)
             if outcome == "inference_error":
-                raise RuntimeError("model failed")
+                raise ValueError("model failed")
             return super().infer(observation)
 
-    policy = RecordingPolicy(metadata=meta)
     request = p.build_request(
-        request_id=42,
-        prompt=sample["prompt"],
-        state=sample["state"],
-        images={"head_color": sample["images"]["head_color"]},
-        metadata=meta,
+        request_id=42, prompt=sample["prompt"], state=sample["state"],
+        images={"head_color": image}, metadata=meta,
     )
     if outcome == "invalid_request":
         del request["state"]
 
-    class Connection:
-        request = SimpleNamespace(path=f"/?encoding={encoding}")
-
-        def __init__(self):
-            self.sent = asyncio.Queue()
-            self.incoming = asyncio.Queue()
-
-        async def send(self, frame):
-            await self.sent.put(codec.loads(frame, encoding=encoding))
-
-        async def recv(self):
-            return await self.incoming.get()
-
     async def run():
-        from g2_policy_protocol.server import PolicyServer
-
-        connection = Connection()
-        server = PolicyServer(policy, metadata=meta)
+        connection = FakeConnection(encoding)
+        server = PolicyServer(RecordingPolicy(metadata=meta), metadata=meta)
         handler = asyncio.create_task(server._handler(connection))
         try:
-            assert (await asyncio.wait_for(connection.sent.get(), 2))["type"] == "metadata"
-            await connection.incoming.put(codec.dumps(request, encoding=encoding))
-            response = await asyncio.wait_for(connection.sent.get(), 2)
+            assert (await connection.get())["type"] == "metadata"
+            await connection.put(request)
+            response = await connection.get()
             assert response["request_id"] == 42
             if outcome == "invalid_request":
                 assert not seen
             else:
                 assert seen[0]["prompt"] == sample["prompt"]
                 np.testing.assert_array_equal(seen[0]["state"], sample["state"])
-                np.testing.assert_array_equal(seen[0]["images"]["head_color"], sample["images"]["head_color"])
+                np.testing.assert_array_equal(seen[0]["images"]["head_color"], image)
             if outcome == "success":
                 actions = p.parse_response(response, request_id=42, metadata=meta)
                 np.testing.assert_array_equal(actions, np.repeat(sample["state"][None], 2, axis=0))

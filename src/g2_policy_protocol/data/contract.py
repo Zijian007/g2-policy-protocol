@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-SIDES: tuple[str, ...] = ("left", "right")
+from g2_policy_protocol._constants import CAMERA_IDS, JOINT_FIELDS, POSE_FIELDS, SIDES
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,9 +68,9 @@ class DiskColumnKeys:
 class CameraKeys:
     """Camera short names (JPEG dir) → LeRobot video feature keys."""
 
-    head: str = "head_color"
-    hand_left: str = "hand_left_color"
-    hand_right: str = "hand_right_color"
+    head: str = CAMERA_IDS[0]
+    hand_left: str = CAMERA_IDS[1]
+    hand_right: str = CAMERA_IDS[2]
     roles: tuple[str, ...] = ("cam_head", "cam_wrist_l", "cam_wrist_r")
     images_prefix: str = "observation.images"
 
@@ -98,14 +98,12 @@ class G2LerobotContract:
 
     columns: DiskColumnKeys = DiskColumnKeys()
     joint: VectorLayout = VectorLayout(
-        names=tuple(f"{side}_{name}" for side in SIDES for name in (*(f"joint_{i}" for i in range(1, 8)), "gripper")),
+        names=JOINT_FIELDS,
         per_side_dim=8,
         gripper_indices=(7, 15),
     )
     pose: VectorLayout = VectorLayout(
-        names=tuple(
-            f"{side}_{name}" for side in SIDES for name in ("x", "y", "z", *(f"rot6d_{i}" for i in range(6)), "gripper")
-        ),
+        names=POSE_FIELDS,
         per_side_dim=10,
         gripper_indices=(9, 19),
     )

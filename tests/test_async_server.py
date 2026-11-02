@@ -2,10 +2,10 @@
 
 import asyncio
 import threading
-from types import SimpleNamespace
 
 import numpy as np
-from g2_policy_protocol import codec, protocol
+from conftest import FakeConnection
+from g2_policy_protocol import protocol
 from g2_policy_protocol.server import PolicyServer
 
 
@@ -38,38 +38,26 @@ def test_inference_keeps_loop_responsive_and_serializes_sessions_and_reset():
         def reset(self):
             calls.append((self.index, "reset"))
 
-    class Connection:
-        request = SimpleNamespace(path="/")
-
-        def __init__(self):
-            self.incoming, self.outgoing = asyncio.Queue(), asyncio.Queue()
-
-        async def send(self, payload):
-            await self.outgoing.put(codec.loads(payload))
-
-        async def recv(self):
-            return await self.incoming.get()
-
     async def run():
         server = PolicyServer(Backend(), metadata=metadata)
-        first, second = Connection(), Connection()
+        first, second = FakeConnection(), FakeConnection()
         tasks = [asyncio.create_task(server._handler(first))]
         try:
-            await first.outgoing.get()  # handshake
-            await first.incoming.put(codec.dumps(request))
+            await first.get()  # handshake
+            await first.put(request)
             assert await asyncio.to_thread(started.wait, 2)
             tasks.append(asyncio.create_task(server._handler(second)))
-            assert (await asyncio.wait_for(second.outgoing.get(), 2))["type"] == "metadata"
+            assert (await second.get())["type"] == "metadata"
             assert not finished.is_set()
-            await second.incoming.put(codec.dumps(request))
+            await second.put(request)
             await asyncio.sleep(0)
             assert calls == [(0, "infer")]
             release.set()
             for connection in (first, second):
-                response = await asyncio.wait_for(connection.outgoing.get(), 2)
+                response = await connection.get()
                 protocol.parse_response(response, request_id=1, metadata=metadata)
-            await second.incoming.put(codec.dumps(protocol.build_reset(request_id=2, metadata=metadata)))
-            assert (await asyncio.wait_for(second.outgoing.get(), 2))["type"] == "reset_ack"
+            await second.put(protocol.build_reset(request_id=2, metadata=metadata))
+            assert (await second.get())["type"] == "reset_ack"
             assert calls == [(0, "infer"), (1, "infer"), (1, "reset")]
         finally:
             release.set()

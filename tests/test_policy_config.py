@@ -6,7 +6,8 @@ import numpy as np
 import pytest
 from scipy.spatial.transform import Rotation
 
-from g2_policy_protocol.data.encoding import ActionCodec, encode_state, matrix_pose
+from g2_policy_protocol.data.encoding import ActionCodec, encode_state
+from g2_policy_protocol.data.geometry import matrix_to_pose
 from g2_policy_protocol.data.policy import policy_capabilities, resolve_policy
 
 
@@ -18,11 +19,14 @@ def transform(position, angles):
 
 
 def pair(matrix, gripper):
-    return np.tile(matrix_pose(matrix, gripper, "rot6d"), 2)
+    return np.tile(matrix_to_pose(matrix, gripper, "rot6d"), 2)
 
 
-@pytest.mark.parametrize("method", [None, "component", "se3"])
-@pytest.mark.parametrize("scope", ["chunk", "step"])
+# scope only matters for delta methods.
+METHOD_SCOPES = [(None, None), ("component", "chunk"), ("component", "step"), ("se3", "chunk"), ("se3", "step")]
+
+
+@pytest.mark.parametrize("method,scope", METHOD_SCOPES)
 @pytest.mark.parametrize("rotation", ["rot6d", "quaternion", "axis_angle"])
 @pytest.mark.parametrize("arm", ["both", "left", "right"])
 def test_pose_method_and_scope_match_geometry_and_restore_wire_targets(method, scope, rotation, arm):
@@ -45,9 +49,9 @@ def test_pose_method_and_scope_match_geometry_and_restore_wire_targets(method, s
     reference = start
     for matrix, grip in zip(matrices, [0.1, 0.7, 0.4], strict=True):
         local = np.linalg.inv(reference) @ matrix if method == "se3" else matrix
-        value = matrix_pose(local, grip, rotation)
+        value = matrix_to_pose(local, grip, rotation)
         if method == "component":
-            value[:-1] -= matrix_pose(reference, 0, rotation)[:-1]
+            value[:-1] -= matrix_to_pose(reference, 0, rotation)[:-1]
         expected.append(np.tile(value, 2 if arm == "both" else 1))
         if scope == "step":
             reference = matrix
@@ -85,9 +89,9 @@ def test_state_history_uses_the_configured_method_and_chunk_reference(method, ro
     expected = []
     for matrix in matrices:
         local = np.linalg.inv(matrices[-1]) @ matrix if method == "se3" else matrix
-        value = matrix_pose(local, 0.7, rotation)
+        value = matrix_to_pose(local, 0.7, rotation)
         if method == "component":
-            value[:-1] -= matrix_pose(matrices[-1], 0, rotation)[:-1]
+            value[:-1] -= matrix_to_pose(matrices[-1], 0, rotation)[:-1]
         expected.append(value)
     np.testing.assert_allclose(actual, expected, atol=1e-6)
 

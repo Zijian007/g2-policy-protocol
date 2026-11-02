@@ -1,318 +1,224 @@
-# 通信协议
+# 通信协议 g2.policy.v3
 
-[文档入口](../README.md#文档导航) · [安装与接入](guide.md) · [policy 配置](policy-config.md)
+[README](../README.md) · [安装](install.md) · [policy 配置](policy-config.md)
 
-本页定义域控 client 与 GPU server 之间的线上契约 `g2.policy.v3`。握手阶段拒绝其他协议。包版本与升级要求见[安装与版本](guide.md#安装与版本)。
-
-## 术语
-
-| 术语 | 含义 |
-|---|---|
-| client / server | client 是域控上的 wholebody；server 是 GPU 上的模型服务（OpenPI、LeRobot 或第三方） |
-| metadata / 握手 | 连接建立后 server 发出的第一条消息，声明模型能力；client 校验后才发送观测 |
-| pose20 | 双臂末端位姿向量：每臂 xyz(3) + rot6d(6) + 夹爪(1)，左臂在前，共 20 维 |
-| joint16 | 双臂关节向量：每臂 7 个关节 + 夹爪，左臂在前，共 16 维 |
-| rot6d | 旋转矩阵前两列按列拼接：`R[:, :2].reshape(-1, order="F")`；单位旋转为 `[1,0,0,0,1,0]` |
-| close_01 / close_ratio | 夹爪绝对闭合比例，0 开、1 闭；任何控制量下都不作差分 |
-| base_link / flange | 线上位姿的父坐标系和末端点：机器人基座坐标系下的法兰位姿 |
-| control_quantity | server 返回的动作含义：`pose_target`、`joint_position` |
-| H | `action_horizon`，模型一次预测的动作步数 |
-| R | 一次响应实际返回的步数，1 ≤ R ≤ H |
-| K | client 从一次响应中提交执行的步数，由 wholebody 的 `execution_steps` 决定 |
-| chunk | 一次推理返回的一段动作序列，形状 `(R, D)`，D=`action_spec.dim` |
-| context | 观测之外、模型可能需要的参考量，例如指令位姿、历史、坐标变换 |
-| RTC | Real-Time Chunking：推理期间机器人继续执行旧 chunk，新 chunk 的开头需与已执行部分衔接。见[RTC](#rtc) |
-| episode / reset | 一次任务尝试；`reset` 消息清理 server 端该会话的状态，与机器人归位无关 |
-
-## 连接与消息
-
-WebSocket 默认使用二进制 MessagePack；URL 带 `?encoding=json` 时整条连接使用 JSON text frames。编码由连接参数确定，不在 metadata 中重复声明；整条连接不混发帧类型。
+域控上的 wholebody 是 **client**，GPU 上的模型服务（OpenPI、LeRobot 或第三方）是 **server**。两者通过 WebSocket 交换三种核心消息：
 
 ```text
-client                                server
-  │ ◀──────────── metadata ──────────── │   连接后 server 主动发送
-  │ ─── obs(request_id=1) ────────────▶ │
-  │ ◀── action(1) 或 error(1) ───────── │
-  │ ─── obs(request_id=2) ────────────▶ │
-  │ ◀── action(2) ───────────────────── │
-  │ ─── reset(request_id=3) ──────────▶ │   仅 reset_supported=true
-  │ ◀── reset_ack(3) ────────────────── │
+client（域控）                           server（GPU）
+   │ ◀──────── ① metadata ────────────── │  连接后 server 先声明"我需要什么、返回什么"
+   │ ───────── ② obs ──────────────────▶ │  client 按声明发送观测
+   │ ◀──────── ③ action（或 error）────── │  server 返回一段动作
+   │            ②③ 循环 ...              │
 ```
 
-| type | 方向 | 必含字段 | 构造 / 解析 |
-|---|---|---|---|
-| `metadata` | server → client | 见[握手与能力](#握手与能力) | `build_metadata` / `validate_metadata` |
-| `obs` | client → server | request_id、images，以及握手要求的 prompt/state/joint_state/context | `build_request` / `parse_request` |
-| `action` | server → client | request_id、actions `(R, D)` | `build_response` / `parse_response` |
-| `error` | server → client | request_id、code、message | `build_error`；`parse_response` 收到时抛 `RuntimeError` |
-| `reset` | client → server | request_id | `build_reset` |
-| `reset_ack` | server → client | request_id | `build_reset_ack` |
+本页先讲跑通这个循环需要知道的内容，再讲按需开启的[可选能力](#可选能力)。
 
-error 的 code 为 `invalid_request`（请求无法解析或不满足握手）或 `inference_error`（模型或响应构造失败）。请求 ID 无效时 server 使用 `0`。
+## 一次完整交互
 
-## 握手与能力
+server 用 `build_metadata` 声明能力，两端所有 `build_*` / `parse_*` 都传入这同一份 metadata：
 
-metadata 字段：
+```python
+from g2_policy_protocol import protocol as p
 
-| 字段 | 含义 |
-|---|---|
-| `protocol` | 固定 `g2.policy.v3` |
-| `policy_hz` | 动作时间轴频率；不是 GPU 推理频率 |
-| `action_horizon` | H |
-| `arm` | `left` / `right` / `both`，实际执行侧 |
-| `required_cameras` | 必须携带的相机；可以为空或只选腕部 |
-| `image_encoding` / `image_resize` / `image_sizes` | 图像传输格式（raw / jpeg）、缩放方式（resize / letterbox）、按相机的 `[H,W]` |
-| `rtc_supported` | server 是否处理 RTC 字段 |
-| `requires_joint_state` | 必须与 `observation_spec.joint` 一致 |
-| `action_spec` | control_quantity、dim、fields、units、frame、ee_frame、representation |
-| `observation_spec` | pose/joint/prompt 是否必需、history_steps、history_hz、必需 context_keys |
-| `timing.action_dt` | 相邻预测动作间隔，必须等于 1/policy_hz |
-| `timing.first_target_offset_s` | 首个目标相对本次观测时刻的偏移 |
-| `reset_supported` | 是否实现当前会话的 episode reset |
-| `extensions` | 可选；普通键为诊断信息，`response_mode` 受校验 |
+# ① server：右臂模型，用头部和右腕相机，一次预测 50 步，30 Hz
+metadata = p.build_metadata(
+    policy_hz=30, action_horizon=50, arm="right",
+    required_cameras=["head_color", "hand_right_color"],
+    image_sizes={"head_color": [224, 224], "hand_right_color": [224, 224]},
+)
 
-`prompt` 仅在 `observation_spec.prompt=true` 时要求非空。`state`（pose20）和 `joint_state`（joint16）只在声明需要时强制携带。
+# ② client：发送当前观测
+obs = p.build_request(
+    request_id=1, prompt="拿起饮料", metadata=metadata,
+    state=pose20,                                    # 当前双臂位姿，见下文"数据约定"
+    images={"head_color": head_rgb, "hand_right_color": right_rgb},   # 224×224×3 uint8
+)
 
-## 消息样例
-
-以下为 `build_*` 实际生成的 JSON 编码（数组用 `$g2` 表示，见[编解码](#编解码)），对应右臂、只用头部相机、H=2 的服务。
-
-metadata：
-
-```json
-{
-  "type": "metadata",
-  "protocol": "g2.policy.v3",
-  "policy_hz": 30.0,
-  "action_horizon": 2,
-  "arm": "right",
-  "image_encoding": "raw",
-  "image_resize": "resize",
-  "image_sizes": {"head_color": [224, 224]},
-  "required_cameras": ["head_color"],
-  "rtc_supported": false,
-  "requires_joint_state": false,
-  "action_spec": {
-    "control_quantity": "pose_target",
-    "dim": 20,
-    "fields": ["left_x", "left_y", "left_z",
-               "left_rot6d_0", "left_rot6d_1", "left_rot6d_2", "left_rot6d_3", "left_rot6d_4", "left_rot6d_5",
-               "left_gripper",
-               "right_x", "right_y", "right_z",
-               "right_rot6d_0", "right_rot6d_1", "right_rot6d_2", "right_rot6d_3", "right_rot6d_4", "right_rot6d_5",
-               "right_gripper"],
-    "units": ["m", "m", "m", "dimensionless", "dimensionless", "dimensionless",
-              "dimensionless", "dimensionless", "dimensionless", "close_ratio",
-              "m", "m", "m", "dimensionless", "dimensionless", "dimensionless",
-              "dimensionless", "dimensionless", "dimensionless", "close_ratio"],
-    "frame": "base_link",
-    "ee_frame": "flange",
-    "representation": "absolute"
-  },
-  "observation_spec": {
-    "pose": true, "joint": false, "prompt": true,
-    "history_steps": 1, "history_hz": 30.0, "context_keys": []
-  },
-  "timing": {"action_dt": 0.03333333333333333, "first_target_offset_s": 0.0},
-  "reset_supported": false,
-  "extensions": {"response_mode": "full_chunk"}
-}
+# ③ server：返回 (步数, 20) 的绝对位姿目标；client 解析并校验
+response = p.build_response(request_id=1, actions=actions, metadata=metadata)
+actions = p.parse_response(response, request_id=1, metadata=metadata)
 ```
 
-obs（图像缩成 1×1 仅为示意，实际为 224×224×3）：
+实际线上消息就是这几个 dict，经 MessagePack（默认）或 JSON 编码后发送：
 
-```json
-{
-  "type": "obs", "request_id": 1, "prompt": "拿起饮料",
-  "state": {"$g2": "ndarray", "dtype": "<f4", "shape": [20],
-            "data": [0,0,0, 1,0,0,0,1,0, 0, 0,0,0, 1,0,0,0,1,0, 0]},
-  "images": {"head_color": {"$g2": "ndarray", "dtype": "|u1", "shape": [1,1,3], "data": [[[0,0,0]]]}},
-  "rtc_enabled": false, "inference_delay": 0, "prev_chunk_left_over": null,
-  "observation_time_ns": 123, "context": {}
-}
+```python
+{"type": "obs", "request_id": 1, "prompt": "拿起饮料", "state": <20 个 float32>, "images": {...}, ...}
+{"type": "action", "request_id": 1, "actions": <50×20 float32>}
+{"type": "error", "request_id": 1, "code": "inference_error", "message": "..."}
 ```
 
-action（R=2，保持当前位姿）：
+- `request_id` 由 client 递增，server 原样返回；client 只接受 ID 对得上的响应。
+- server 出错时回 `error`：请求本身不合法为 `invalid_request`，模型推理失败为 `inference_error`。client 收到 `error` 时 `parse_response` 抛 `RuntimeError`，不执行任何动作。
+- 任何字段不合法都会抛 `ValueError`，非法消息不会到达模型或机器人。
 
-```json
-{
-  "type": "action", "request_id": 1,
-  "actions": {"$g2": "ndarray", "dtype": "<f4", "shape": [2, 20],
-              "data": [[0,0,0, 1,0,0,0,1,0, 0, 0,0,0, 1,0,0,0,1,0, 0],
-                       [0,0,0, 1,0,0,0,1,0, 0, 0,0,0, 1,0,0,0,1,0, 0]]}
-}
+## 数据约定
+
+**位姿向量 pose20**：左右臂各 10 维，左臂在前。位置单位为米，坐标系为机器人基座 `base_link` 下的法兰 `flange`。
+
+```text
+索引   0  1  2 │ 3  4  5  6  7  8 │  9    │ 10 11 12 │ 13 … 18 │ 19
+       x  y  z │ rot6d_0 … rot6d_5 │ 夹爪  │  x  y  z │ rot6d   │ 夹爪
+       └──────────── 左臂 ──────────────┘ └────────── 右臂 ─────────┘
 ```
 
-error / reset / reset_ack：
+- **rot6d**：旋转矩阵 R 的前两列按列拼接，即 `R[:, :2].reshape(-1, order="F")`。单位旋转为 `[1, 0, 0, 0, 1, 0]`。
+- **夹爪**：绝对闭合比例，0 为全开，1 为全闭。
+- **关节向量 joint16**：每臂 7 个关节角（rad）加夹爪，左臂在前。
 
-```json
-{"type": "error", "request_id": 1, "code": "inference_error", "message": "model failed"}
-{"type": "reset", "request_id": 7}
-{"type": "reset_ack", "request_id": 7}
-```
+**动作**：server 返回的永远是上述格式的**绝对目标**，形状为 `(步数, 20)`，步数为 1 到 `action_horizon`。
 
-## 动作控制量
+- 单臂模型（`arm="right"`）也要返回完整 20 维，未执行一侧填当前实测值。
+- 模型内部用的增量、其他旋转表示、补齐维度等，都由 server 适配层还原后再返回。
+- 动作的时间间隔为 `1 / policy_hz`。`policy_hz` 是动作时间轴的频率，不是 GPU 每秒推理次数。
+- 限速、可达性和关节规划由 wholebody 控制层负责，协议不检查。
 
-控制量固定为规范化的完整双臂布局，左右顺序，每臂最后一维都是绝对夹爪 close_ratio（0 开、1 闭）。使用 `protocol.build_action_spec(quantity)` 构造，校验拒绝错配的维度、字段、单位和坐标系：
+**图像**：RGB uint8，形状 H×W×3，相机名为 `head_color`、`hand_left_color`、`hand_right_color`。client 按 metadata 声明的尺寸缩放，按声明的方式编码，server 收到后再解码。
 
-| control_quantity | D | 每臂分量与单位 |
-| --- | --- | --- |
-| pose_target | 20 | xyz 米、rot6d、gripper |
-| joint_position | 16 | 7 关节 rad、gripper |
+当前帧和 `context.image_history` 都跟随 `image_encoding`：`raw` 历史是 `uint8 (L,H,W,3)` 数组，`jpeg` 历史是长度为 L 的非空 JPEG `bytes` 列表，从旧到新，最后一帧为当前帧。协议核心只校验 JPEG 的表示；backend 解码并检查尺寸，非法图像返回 `invalid_request`。
 
-字段顺序：
+有完整 `context.image_history` 时可省略 `images`，backend 直接使用历史（包含当前帧），请求解析也不补建 `images`。无图像历史时仍须发送 `images`（不需要相机时发 `{}`）。两者都发送的旧请求仍会校验并接受；第一方客户端只发送历史，避免重复缩放、编码、打包和传输当前帧。
 
-- pose20：`left_x, left_y, left_z, left_rot6d_0…5, left_gripper`，然后右臂同样 10 个。
-- joint16：`left_joint_1…7, left_gripper`，然后 `right_joint_1…7, right_gripper`。
+## 握手 metadata
 
-位姿使用 base_link 下的 flange；TCP、局部参考、delta 或旋转表示由模型适配层转换。`arm` 限定实际执行侧，另一侧保持实测位置。
+`build_metadata` 的参数里，**通常只需要设置下面这些**，其余字段会自动推导出一致的值：
 
-## 观测、历史与参考
-
-请求为 `type=obs`、request_id、可选 prompt/state/joint_state、images、context、observation_time_ns 与可选 RTC 字段。历史 L>1 时必须给 observation_time_ns（客户端本机单调时钟）；历史从最旧到当前时刻，间隔 1/history_hz。服务端不将这个值与另一台机器的时钟相减。
-
-context 可用的键：
-
-| 键 | 形状 | 含义 |
+| 参数 | 默认值 | 说明 |
 |---|---|---|
-| `command_pose` / `command_joint` | (20,) / (16,) | 当前指令参考 |
-| `previous_command_pose` | (20,) | observation_time_ns − 1/history_hz 时刻的指令，不是上一拍控制发布值 |
-| `start_pose` / `start_joint` | (20,) / (16,) | episode 起点 |
+| `policy_hz` | 必填 | 动作频率，须与训练数据一致 |
+| `action_horizon` | 50 | 一次最多返回的动作步数 |
+| `arm` | `both` | 实际执行哪一侧：`both` / `left` / `right` |
+| `required_cameras` | 按 `arm` 推导 | 必须发送的相机；按模型真实输入声明，可以为空 |
+| `image_sizes` | 不缩放 | 每个相机的 `[高, 宽]` |
+| `image_resize` | `resize` | `resize` 拉伸，或 `letterbox` 保持比例并补黑边；须与训练预处理一致 |
+| `image_encoding` | `raw` | `raw` 发原始像素，`jpeg` 发压缩字节（体积小，server 需解码） |
+
+开启可选能力时还会用到 `requires_joint_state`、`rtc_supported`、`reset_supported`、`observation_spec`、`action_spec`、`extensions`，见下一节。
+
+metadata 里还有一些字段由上述参数自动推导，并在握手时校验一致性，一般不需要手写：`protocol`（固定 `g2.policy.v3`）、`timing.action_dt`（等于 `1/policy_hz`）、`action_spec` 的字段名、单位和坐标系。
+
+## 可选能力
+
+每项能力都由 server 在 metadata 中声明，client 按声明配合。不声明就不会用到。
+
+### 关节状态与关节控制
+
+- **模型需要关节角作为输入**：设 `requires_joint_state=True`，client 会在 obs 中加入 `joint_state`（joint16）。
+- **模型输出关节角**：设 `action_spec=p.build_action_spec("joint_position")`，动作变为 `(步数, 16)` 的 joint16。默认的 `pose_target` 输出 pose20。
+
+wholebody 只执行已绑定执行器的控制量，否则会在打开硬件前拒绝。
+
+### 历史与参考量（context）
+
+模型需要过去几帧或额外参考时，在 `observation_spec` 中声明 `history_steps`、`history_hz` 和 `context_keys`，client 会在 obs 的 `context` 字段中只发送声明过的键。
+
+| context 键 | 形状 | 含义 |
+|---|---|---|
+| `pose_history` / `joint_history` | (帧数, 20) / (帧数, 16) | 状态历史，从旧到新，间隔 `1/history_hz` |
+| `image_history` | 每个必需相机的历史 | 编码随 `image_encoding`：raw 为 uint8 (L,H,W,3)，jpeg 为 L 个 bytes 的列表 |
+| `command_pose` / `command_joint` | (20,) / (16,) | 当前下发的指令 |
+| `previous_command_pose` | (20,) | 上一个历史采样时刻的指令 |
+| `start_pose` / `start_joint` | (20,) / (16,) | 本次 episode 起点 |
 | `object_pose` / `object_joint` | (20,) / (16,) | 物体等额外参考 |
-| `base_to_parent` | 4×4 刚体矩阵 | 见下文 |
-| `pose_history` / `joint_history` | (L,20) / (L,16) | 状态历史，最旧在前 |
-| `image_history` | 按相机名：(L,H,W,3) RGB uint8 | 尺寸遵循 image_sizes；当前帧 images 可用 JPEG，历史只用 raw |
+| `base_to_parent` | 4×4 矩阵 | 坐标系为 `arm_base_link` 时使用：`T_armbase←base`，把 base_link 下的位姿换算到臂基座坐标系，即当前时刻臂基座位姿的逆 |
 
-必需的键由 `observation_spec.context_keys` 声明。当前训练配置若相对指令，只声明 command_pose / command_joint。
+`history_steps > 1` 时，obs 必须带 `observation_time_ns`（client 本机单调时钟）。server 不会把它和自己的时钟比较。
 
-policy 选择 `parent_frame: arm_base_link` 时声明 `base_to_parent`，方向为当前观测时刻的 `T_armbase←base`。客户端从实测腰部关节计算；整段历史、动作 chunk 和 RTC 前缀共用本次请求的变换。模型输出还原到 base_link 后返回，线上的 state、command_pose 和 pose_target 始终使用 base_link。
+这些声明通常不手写：训练配置经 `data.policy.policy_capabilities` 自动生成，见 [policy 配置](policy-config.md)。
 
-## 响应
+### RTC（推理期间的动作衔接）
 
-响应 `type=action`、相同 request_id、有限数组 actions(R,D)，1≤R≤H，可携带 timing/rtc_info。调用 `build_response(..., metadata=meta)`、`parse_response(..., metadata=meta)` 校验 D。`extensions.response_mode: full_chunk` 进一步要求 R=H；`variable_chunk` 允许范围内的可变长度，未知模式在握手时拒绝。
+推理需要时间，这段时间里机器人还在执行上一段动作。RTC 让新动作的开头与已执行的部分衔接，避免切换时跳变。
 
-## RTC
+server 设 `rtc_supported=True` 后，client 可以在 obs 中附加三个字段：
 
-RTC（Real-Time Chunking）解决的问题：server 推理需要时间，这段时间里机器人仍在执行上一个 chunk。新 chunk 的开头必须与"推理期间已经执行、无法更改"的那几步衔接，否则会在 chunk 切换处跳变。
-
-只有 client 知道执行进度，因此分工如下：
-
-| 层 | 负责 |
+| obs 字段 | 含义 |
 |---|---|
-| wholebody（client） | 记录旧 chunk 剩余部分、估计推理期间会执行的步数，填入 obs |
-| 本协议 | 声明能力、传输字段、校验格式 |
-| 模型（server） | 用前缀约束新 chunk 的生成（例如 OpenPI 的 guided 采样）；算法不属于协议 |
+| `rtc_enabled` | 本次请求是否使用 RTC |
+| `prev_chunk_left_over` | 上一段动作中尚未执行的部分，形状 `(步数, 20)` |
+| `inference_delay` | 预计推理期间会执行掉的步数，须小于 `action_horizon`，且不超过上一项的步数 |
 
-obs 中的 RTC 字段：
+如何利用这些信息约束新动作，属于模型算法（例如 OpenPI 的引导采样），不在协议范围内。
 
-| 字段 | 含义 |
-|---|---|
-| `rtc_enabled` | 本次请求是否使用 RTC；仅 `rtc_supported=true` 时可为 true |
-| `prev_chunk_left_over` | 旧 chunk 尚未执行的部分，`(P, D)`，与动作同一控制量；P 可小于 H |
-| `inference_delay` | 推理期间机器人将执行的步数；须 < H 且 ≤ P |
+### Episode reset
 
-`rtc_enabled=false` 时另两个字段必须为默认值（0 / null）。
+server 设 `reset_supported=True` 后，client 可以在新任务开始时发 `{"type": "reset", "request_id": N}`，server 清理该连接的历史和模型状态后回 `reset_ack`。它与机器人归位无关。同一连接可以跑多个 episode，换连接就是新会话。
 
-## Episode reset
+### 响应长度
 
-显式 episode 边界：客户端发 `{"type":"reset","request_id":N}`，server 清理该会话的历史、参考和模型状态后回 `reset_ack`。只有握手声明 reset_supported 时可调用。同一连接可以承载多个 episode；换连接也创建独立 session。reset 与机器人归位命令无关。
-
-## 预测与执行时间
-
-`timing.action_dt=1/policy_hz`，例如 30 Hz 时相邻目标间隔约 33.3 ms。`action_horizon=50` 表示返回 50 个采样点，首末目标时间差为 49/30 秒；不要求 GPU 每次推理只耗时 33.3 ms。
-
-H、R、K 的职责和重规划行为见[预测块与执行预算](development.md#预测块与执行预算)。
-
-## 图像
-
-- 相机名称为 `head_color`、`hand_left_color`、`hand_right_color`。仅 `metadata.required_cameras` 必须存在；不需要的相机可省略或为 null。
-- 原始图像为 RGB uint8 H×W×3；JPEG 为 bytes。
-- `image_sizes` 按相机声明 `[H,W]`，`image_resize` 为 `resize` 或 `letterbox`。
-- 编码、缩放和解压由适配层负责。JPEG 解码后 server 可调用 `validate_images(..., decoded=True)` 再检查实际尺寸。协议包不解压图像。
+`extensions={"response_mode": "full_chunk"}` 表示每次都返回满 `action_horizon` 步，返回不足会被拒绝；`variable_chunk` 允许返回 1 到 `action_horizon` 之间任意步数。`extensions` 里的其他键只作诊断信息。
 
 ## 编解码
 
-两种编码使用相同的协议 API，通过 `codec.dumps(message, encoding=...)` 和 `codec.loads(frame, encoding=...)` 切换；`encoding` 默认为 `"msgpack"`。底层 `packb/unpackb/json_dumps/json_loads` 也保留。
+用 `codec.dumps(message, encoding=...)` 和 `codec.loads(frame, encoding=...)` 编解码。默认 MessagePack，URL 带 `?encoding=json` 时整条连接改用 JSON。
 
-普通 JSON 数值列表可以直接表示 state/action；NumPy 数组与 bytes 的跨语言表示如下：
+MessagePack 中的 NumPy 数组采用与 OpenPI 兼容的格式，不使用 pickle。JSON 中数组和字节的表示如下：
 
 ```json
-{
-  "state": {"$g2":"ndarray","dtype":"<f4","shape":[2],"data":[1.0,2.0]},
-  "image": {"$g2":"bytes","encoding":"base64","data":"/9j/2Q=="}
-}
+{"state": {"$g2": "ndarray", "dtype": "<f4", "shape": [2], "data": [1.0, 2.0]},
+ "image": {"$g2": "bytes", "encoding": "base64", "data": "/9j/2Q=="}}
 ```
 
-这是类型表示示例，两个数不是合法 pose20，图片仅占位。数组 data 为与 shape 对应的嵌套列表；NumPy 标量用 `{"$g2":"scalar","dtype":"<f4","data":1.0}`。`$g2` 为保留键；JSON 拒绝非有限数字、错误 shape/Base64 和超范围整数。MessagePack 保持 OpenPI 兼容的 NumPy 标记，不使用 pickle。
+`$g2` 是保留键。非有限数、shape 不符、Base64 错误都会被拒绝。
 
-## 协议 API
+## 接入模型（server 侧）
+
+`PolicyServer` 负责连接、编解码、校验、请求 ID 和错误响应，你只需要实现 backend 的 `infer`：
 
 ```python
-from g2_policy_protocol import codec, protocol as p
+from g2_policy_protocol.images import decode_image_history, decode_images
+from g2_policy_protocol.server import PolicyServer
+
+class Backend:
+    def infer(self, request):                    # request 已通过校验
+        history = request["context"].get("image_history")
+        images = (decode_images(request["images"], metadata) if history is None
+                  else decode_image_history(history, metadata))  # 历史包含当前帧
+        actions = ...                            # 模型推理，并还原为 (步数, 20) 绝对位姿
+        return {"actions": actions}
+    # 可选：new_session() 为每条连接建独立状态；reset() 配合 reset_supported=True
+
+PolicyServer(Backend(), metadata=metadata, host="0.0.0.0", port=8000).serve_forever()
 ```
 
-| 阶段 | API | 调用方责任 |
-|---|---|---|
-| 握手 | `build_metadata` / `validate_metadata` | 直接构造 v3；客户端保留协商后的 metadata |
-| 观测 | `build_request` / `parse_request` | 传入同一份 metadata，以及声明需要的图像、状态、context 和观测时间 |
-| 动作 | `build_response` / `parse_response` | 传入 metadata；响应使用原请求 ID，客户端核对预期 ID |
-| 错误 | `build_error` | 有效 ID 原样返回，否则用 `0`；客户端不执行错误响应 |
-| reset | `build_reset` / `build_reset_ack` | 仅 reset_supported 时使用 |
-| 传输 | `codec.dumps` / `codec.loads` | 编码与 URL 一致；调用方负责实际收发 |
+- 所有连接的 `infer` / `reset` 在同一个模型线程上依次执行，网络收发不会被阻塞。
+- 训练和部署共用 `data.encoding.ActionCodec` 来还原动作，用法见 [examples/model_adapter.py](../examples/model_adapter.py)。最小可运行服务见 [examples/minimal_server.py](../examples/minimal_server.py)。
+- OpenPI 和 LeRobot 已有现成的 backend，启动方式见各自的部署文档。
 
-`parse_response` 收到 `error` 时抛出 `RuntimeError`，非法响应抛出 `ValueError`。网络边界处理解码、校验、模型错误与断连；动作可达性和运动约束由机器人执行层负责。
+## client 侧（wholebody）
 
-## 本地编解码示例
+wholebody 的 `G2WebSocketPolicyClient` 依次做这几件事：
 
-下面的示例可在安装本包后直接运行，覆盖两种编码的握手、观测和动作往返。图像和动作均为模拟数据；示例不建立 WebSocket 连接，也不执行机器人动作。
+1. 连接并接收 metadata，用 `validate_metadata` 校验。频率不符、需要 RTC 但 server 不支持、控制量没有对应执行器，都会在打开硬件前拒绝。
+2. 按 metadata 采集观测、缩放和编码图像，发送 obs。
+3. 用 `parse_response` 校验响应，通过后才交给控制层。校验失败或收到 error 时不执行动作，关闭连接并上报。
 
-```python
-import numpy as np
-from g2_policy_protocol import codec, protocol as p
+编码方式由推理 YAML 的 `wire_encoding` 选择。细节见 [wholebody policy 通信契约](../../wholebody/docs/dev/policy-protocol.md)。
 
-# 模拟双臂单位旋转位姿，仅用于本地协议验证。
-state = np.zeros(20, dtype=np.float32)
-state[[3, 7, 13, 17]] = 1.0
+## 验收工具
 
-for encoding in ("msgpack", "json"):
-    # server 声明能力，client 接收并校验。
-    metadata = p.build_metadata(
-        policy_hz=30, action_horizon=2,
-        required_cameras=["head_color"],
-        image_sizes={"head_color": [224, 224]},
-    )
-    client_metadata = codec.loads(codec.dumps(metadata, encoding=encoding), encoding=encoding)
-    p.validate_metadata(client_metadata, policy_hz=30)
-
-    # client 发送观测，server 解析。
-    request = p.build_request(
-        request_id=42, prompt="拿起饮料", state=state,
-        images={"head_color": np.zeros((224, 224, 3), np.uint8)},
-        metadata=client_metadata,
-    )
-    observation = p.parse_request(
-        codec.loads(codec.dumps(request, encoding=encoding), encoding=encoding),
-        metadata=metadata,
-    )
-
-    # 模拟模型返回两帧保持当前位姿的动作。
-    response = p.build_response(
-        request_id=observation["request_id"],
-        actions=np.repeat(observation["state"][None, :], 2, axis=0),
-        metadata=metadata,
-    )
-    actions = p.parse_response(
-        codec.loads(codec.dumps(response, encoding=encoding), encoding=encoding),
-        request_id=42,
-        metadata=client_metadata,
-    )
-    assert actions.shape == (2, 20)
-    np.testing.assert_array_equal(actions[0], state)
-    print(f"{encoding}: round trip OK")
+```bash
+python examples/minimal_server.py --port 8000          # 启动模拟服务；加 --jpeg 测 JPEG 路径
+g2-policy-check --url ws://<gpu-host>:8000 --report report.json
+g2-policy-check --url ws://<gpu-host>:8000 --sample observation.npz --rtc --report rtc.json
 ```
 
-Schema 描述静态结构，Python 校验动态 shape、有限值、相机/RTC 能力、频率和 request_id。动作限速、可达性和关节规划属于 G2 控制层。
+`g2-policy-check` 用 MessagePack 和 JSON 各发两次合成观测，检查握手、响应 ID 和动作形状，并额外检查夹爪在 [0, 1] 内、rot6d 没有退化（`--protocol-only` 跳过这两项）。退出码 0 表示通过。
 
-## 定义来源
+通过只说明协议接入正确，不代表模型质量、坐标系正确或满足实时性。要用真实数据测试，可以用 `diagnostics.samples.save_sample` 把一帧观测导出为 `.npz`。
 
-结构源为 [`g2.schema.json`](../src/g2_policy_protocol/g2.schema.json)，其中 `x-g2` 记录固定向量布局。运行时由 `protocol.py` 检查数组形状、有限值与协商后的动态需求；生成和验证步骤见[开发维护](development.md#修改与验证)。
+## 常见错误
+
+| 报错（节选） | 原因与处理 |
+|---|---|
+| 末尾带 `may run different g2-policy-protocol versions` | 两端协议不兼容。两端更新到最新，先重启 server，见[兼容性](install.md#兼容性如何保证) |
+| `server policy_hz disagrees with configured policy_hz` | client 配置的频率与模型不同。改 client 配置，或设为 null 接受 server 的声明 |
+| `server does not support RTC` | client 开了 RTC，server 没有声明支持 |
+| `missing required cameras` / `size disagrees with metadata image_sizes` | client 发的相机名或图像尺寸与 metadata 不符 |
+| `server requires a nonempty prompt` / `history requires observation_time_ns` | 缺少 metadata 要求的观测字段 |
+| `response request_id does not match observation` | server 没有原样返回 ID，或 client 读到了旧响应 |
+| `full_chunk response must contain action_horizon actions` / `actions exceeds action_horizon` | 返回的步数与声明不符 |
+| `actions must be finite nonempty (T, D)` | 模型输出没有还原成完整双臂维度（单臂没补齐、补齐维度没去掉），或含 NaN / Inf |
+| `requires_joint_state disagrees ...` / `action_dt disagrees ...` / `action_spec must use the canonical layout` | 手写的 metadata 前后不一致。改用 `build_metadata` / `build_action_spec` 生成 |
+
+协议校验都通过、但机器人动作异常时，问题一般不在协议层。先核对坐标系（`base_link` / `flange`）、rot6d 的列顺序、夹爪 0 开 1 闭、单位，再核对训练和部署的图像预处理是否一致。
