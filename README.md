@@ -17,7 +17,29 @@
                      WebSocket · g2.policy.v3 · MessagePack 或 JSON
 ```
 
-两端以 editable 方式安装相邻 clone 的本仓库，各自 `git pull` 更新；不兼容会在握手时报错，改变线上语义时须升级 `PROTOCOL` 版本，见[兼容性如何保证](docs/install.md#兼容性如何保证)。
+本包可独立普通安装、可编辑安装或构建为 wheel。现有模型 bootstrap 默认以可编辑方式安装相邻 checkout；
+更新源码后重启服务。改变线上语义时须升级 `PROTOCOL` 版本，见 [兼容性如何保证](docs/install.md#兼容性如何保证)。
+
+## 安装
+
+要求 Python 3.10+。以下命令从本仓库根目录执行，`python` 指向调用方环境。
+已有应用环境时直接使用它；独立使用时可在仓库外创建环境：
+
+```bash
+python3 -m venv ~/.venvs/robot-dev
+source ~/.venvs/robot-dev/bin/activate
+```
+
+普通安装与导入检查：
+
+```bash
+python -m pip install .
+python -c "import g2_policy_protocol; print(g2_policy_protocol.__file__)"
+```
+
+源码开发使用 `python -m pip install -e . pytest`；本包没有 `[dev]` extra。
+wheel 构建、离线安装、卸载、uv 环境替代命令和现有应用接入见 [安装指南](docs/install.md)。
+协议代码无需 C++ 编译，也不需要 GPU、模型或机器人 SDK。
 
 ## 文档
 
@@ -65,8 +87,8 @@ src/g2_policy_protocol/
 ```
 
 ```bash
-uv venv .venv --python 3.11 && uv pip install --python .venv/bin/python -e . pytest
-.venv/bin/python -m pytest          # 约 1 秒，无需 GPU/模型/机器人
+python -m pip install -e . pytest
+python -m pytest
 ```
 
 改布局或枚举只改 `_constants.py`；新增消息字段时同步改 `_messages.py` 的字段表与检查函数、[通信协议](docs/protocol.md) 和测试。"某个 policy 需要哪些列 / context"只由 `data.policy` 的查询函数（`uses_kind`、`command_reference_kinds`、`uses_arm_base`）回答，训练和部署都调用它们。**结构不变但线上含义改变时，必须升级 `_constants.PROTOCOL`**，并记入 CHANGELOG。
