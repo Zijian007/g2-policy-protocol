@@ -3,8 +3,9 @@ import copy
 import numpy as np
 import pytest
 from g2_policy_protocol import protocol
-from g2_policy_protocol.data.dataset import validate_dataset_contract
-from g2_policy_protocol.data.policy import policy_capabilities, resolve_policy
+from g2_policy_protocol.contracts.dataset import validate_dataset_contract
+from g2_policy_protocol.capabilities import policy_capabilities
+from g2_policy_protocol.contracts.policy import resolve_policy
 
 
 def test_full_chunk_profile_rejects_short_response_but_accepts_short_rtc_prefix():

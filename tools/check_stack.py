@@ -1,7 +1,7 @@
 """Run actual adapters in their native environments against wholebody's dev client.
 
-No model weights, GPU or robot hardware are used. Each sibling repository needs
-its own installed .venv. Run this with lerobot-finetune/.venv/bin/python.
+No model weights, GPU or robot hardware are used. Backend interpreters default
+to sibling .venv directories; --lerobot-python/--openpi-python can override them.
 """
 
 import argparse
@@ -17,8 +17,8 @@ from types import SimpleNamespace
 
 async def serve_worker(args):
     import numpy as np
-    from g2_policy_protocol.data.encoding import ActionCodec
-    from g2_policy_protocol.data.policy import resolve_policy
+    from g2_policy_protocol.contracts.policy import resolve_policy
+    from g2_policy_protocol.processing.encoding import ActionCodec
     from websockets.asyncio.server import serve
 
     root = args.stack_root / args.backend
@@ -38,11 +38,7 @@ async def serve_worker(args):
     codec = ActionCodec(settings, "right")
 
     def prediction(obs):
-        reference = obs[
-            "observation/pose"
-            if args.quantity == "pose_target"
-            else "observation/joint"
-        ]
+        reference = obs["observation/pose" if args.quantity == "pose_target" else "observation/joint"]
         actions = np.tile(reference, (4, 1))
         actions[:, 10 if args.quantity == "pose_target" else 8] += np.arange(1, 5) / 100
         if args.history > 1:
@@ -50,7 +46,7 @@ async def serve_worker(args):
         return codec.encode(actions, obs)
 
     if args.backend == "lerobot-finetune":
-        from g2_policy_protocol.server import PolicyServer
+        from g2_policy_protocol.runtime.server import PolicyServer
         from lerobot_finetune.deploy.g2_server import G2Backend, metadata_for
 
         runtime = SimpleNamespace(
@@ -58,25 +54,21 @@ async def serve_worker(args):
             config=SimpleNamespace(
                 type="act",
                 observation_delta_indices=[-1, 0] if args.history > 1 else None,
-                input_features={
-                    "observation.images.head_color": SimpleNamespace(shape=(3, 8, 8))
-                },
+                input_features={"observation.images.head_color": SimpleNamespace(shape=(3, 8, 8))},
             ),
             rename_map={},
             horizon=4,
         )
 
         def predict(batch, refs):
-            assert batch["observation.state"].shape == (
-                (1, 2, 10) if args.history > 1 else (1, 10)
-            )
+            assert batch["observation.state"].shape == ((1, 2, 10) if args.history > 1 else (1, 10))
             assert batch["observation.images.head_color"].shape == (
                 (1, 2, 3, 8, 8) if args.history > 1 else (1, 3, 8, 8)
             )
             return codec.decode(prediction(refs), refs)
 
         runtime.predict = predict
-        metadata = metadata_for(runtime)
+        metadata = metadata_for(runtime, args.image_encoding)
         server = PolicyServer(G2Backend(runtime, metadata), metadata=metadata)
     else:
         from openpi.adapters.g2.policy import G2Policy
@@ -84,16 +76,13 @@ async def serve_worker(args):
 
         def infer(obs):
             image = obs["observation/image"]
-            assert image.shape == (
-                (2, 224, 224, 3) if args.history > 1 else (224, 224, 3)
-            )
+            assert image.shape == ((2, 224, 224, 3) if args.history > 1 else (224, 224, 3))
             return {"actions": prediction(obs)}
 
-        native = SimpleNamespace(
-            metadata={"arm": "right"}, infer=infer, reset=lambda: None
-        )
+        native = SimpleNamespace(metadata={"arm": "right"}, infer=infer, reset=lambda: None)
         server = G2PolicyServer(
             G2Policy(native, settings),
+            image_encoding=args.image_encoding,
             metadata={
                 "policy_contract": settings,
                 "arm": "right",
@@ -103,16 +92,14 @@ async def serve_worker(args):
             },
         )
     # Let the OS assign the port, and report readiness only after the listener exists.
-    async with serve(
-        server._handler, "127.0.0.1", 0, compression=None, max_size=None
-    ) as listener:
+    async with serve(server._handler, "127.0.0.1", 0, compression=None, max_size=None) as listener:
         print(listener.sockets[0].getsockname()[1], flush=True)
         await listener.serve_forever()
 
 
 def check_stack(args):
     import numpy as np
-    from g2_policy_protocol.images import encode_jpeg
+    from g2_policy_protocol.runtime.images import encode_jpeg
 
     sys.path.insert(0, str(args.stack_root))
     from wholebody.external_services.policy.runtime.execution import execution_plan
@@ -123,12 +110,8 @@ def check_stack(args):
     manifest = {}
     for name in ("wholebody", "lerobot-finetune", "openpi", "g2-policy-protocol"):
         root = args.stack_root / name
-        head = subprocess.check_output(
-            ["git", "-C", str(root), "rev-parse", "HEAD"], text=True
-        ).strip()
-        branch = subprocess.check_output(
-            ["git", "-C", str(root), "branch", "--show-current"], text=True
-        ).strip()
+        head = subprocess.check_output(["git", "-C", str(root), "rev-parse", "HEAD"], text=True).strip()
+        branch = subprocess.check_output(["git", "-C", str(root), "branch", "--show-current"], text=True).strip()
         paths = subprocess.check_output(
             [
                 "git",
@@ -152,13 +135,15 @@ def check_stack(args):
             "source_sha256": digest.hexdigest(),
         }
     results = []
-    for backend, quantity, history in itertools.product(
+    for backend, quantity, history, image_encoding in itertools.product(
         ("lerobot-finetune", "openpi"),
         ("pose_target", "joint_position"),
         (1, 2),
+        ("raw", "jpeg"),
     ):
+        interpreter = args.lerobot_python if backend == "lerobot-finetune" else args.openpi_python
         command = [
-            str(args.stack_root / backend / ".venv/bin/python"),
+            str(interpreter or args.stack_root / backend / ".venv/bin/python"),
             str(Path(__file__).resolve()),
             "--stack-root",
             str(args.stack_root),
@@ -168,25 +153,21 @@ def check_stack(args):
             quantity,
             "--history",
             str(history),
+            "--image-encoding",
+            image_encoding,
         ]
         process = subprocess.Popen(command, stdout=subprocess.PIPE, text=True)
         try:
             line = process.stdout.readline().strip()
             if not line:
-                raise RuntimeError(
-                    f"{backend} worker exited during startup ({process.wait()})"
-                )
+                raise RuntimeError(f"{backend} worker exited during startup ({process.wait()})")
             port = int(line)
             for encoding in ("json", "msgpack"):
                 with G2WebSocketPolicyClient(port=port, encoding=encoding) as client:
                     metadata = client.metadata
                     assert metadata["extensions"]["response_mode"] == "full_chunk"
-                    assert execution_plan(
-                        metadata, fallback_horizon=4, execution_steps=2
-                    ) == (2, 4)
-                    pose = np.tile([0, 0, 0, 1, 0, 0, 0, 1, 0, 0.5], 2).astype(
-                        np.float32
-                    )
+                    assert execution_plan(metadata, fallback_horizon=4, execution_steps=2) == (2, 4)
+                    pose = np.tile([0, 0, 0, 1, 0, 0, 0, 1, 0, 0.5], 2).astype(np.float32)
                     joint = np.zeros(16, np.float32)
                     image = np.full((8, 8, 3), 128, np.uint8)
                     context = {}
@@ -199,10 +180,13 @@ def check_stack(args):
                             context["joint_history"] = np.tile(joint, (2, 1))
                         size = metadata["image_sizes"]["head_color"]
                         frame = np.full((*size, 3), 128, np.uint8)
-                        context["image_history"] = {"head_color": (
-                            [encode_jpeg(frame)] * history if metadata["image_encoding"] == "jpeg"
-                            else np.repeat(frame[None], history, axis=0)
-                        )}
+                        context["image_history"] = {
+                            "head_color": (
+                                [encode_jpeg(frame)] * history
+                                if metadata["image_encoding"] == "jpeg"
+                                else np.repeat(frame[None], history, axis=0)
+                            )
+                        }
                     request = {
                         "task": "stack validation",
                         "pose": pose,
@@ -218,9 +202,7 @@ def check_stack(args):
                             20 if quantity == "pose_target" else 16,
                         )
                         offset = 10 if quantity == "pose_target" else 8
-                        np.testing.assert_allclose(
-                            actions[:, offset], np.arange(1, 5) / 100, atol=1e-6
-                        )
+                        np.testing.assert_allclose(actions[:, offset], np.arange(1, 5) / 100, atol=1e-6)
                         np.testing.assert_allclose(
                             actions[:, :offset],
                             np.tile(
@@ -236,6 +218,7 @@ def check_stack(args):
                             "quantity": quantity,
                             "history": history,
                             "encoding": encoding,
+                            "image_encoding": image_encoding,
                         }
                     )
         finally:
@@ -259,6 +242,9 @@ if __name__ == "__main__":
     parser.add_argument("--backend", choices=["lerobot-finetune", "openpi"])
     parser.add_argument("--quantity", choices=["pose_target", "joint_position"])
     parser.add_argument("--history", type=int, choices=[1, 2], default=1)
+    parser.add_argument("--image-encoding", choices=["raw", "jpeg"], default="jpeg")
+    parser.add_argument("--lerobot-python", type=Path, help="LeRobot backend interpreter")
+    parser.add_argument("--openpi-python", type=Path, help="OpenPI backend interpreter")
     args = parser.parse_args()
     if args.backend:
         asyncio.run(serve_worker(args))

@@ -8,7 +8,7 @@ A per-arm pose vector is ``[x, y, z, rotation..., gripper]``. ``rotation`` is
 import numpy as np
 from scipy.spatial.transform import Rotation
 
-from .._constants import POSE_ARM_DIM, SIDES
+from g2_policy_protocol.types import POSE_ARM_DIM, SIDES
 
 ROTATION_WIDTHS = {"rot6d": 6, "quaternion": 4, "axis_angle": 3}
 

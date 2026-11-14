@@ -1,12 +1,12 @@
 # G2 训练 policy 字段速查
 
-[README](../README.md) · [职责划分](../README.md#职责划分) · [通信协议](protocol.md)
+[README](../README.md) · [源码结构](../README.md#当前源码结构) · [通信协议](protocol.md)
 
-LeRobot 和 OpenPI 使用同一套 `policy.state/action/timing`，约定如何把机器人观测和示教目标编码成模型输入与训练标签，并在部署时还原输出。训练 YAML 外层、配置版本和 checkpoint 格式由各模型仓库维护，见 [OpenPI 训练配置](../../openpi/scripts/g2/docs/training.md) 和 [LeRobot 训练配置](../../lerobot-finetune/scripts/g2/docs/training.md)。候选值与组合约束由 [data/policy.py](../src/g2_policy_protocol/data/policy.py) 校验。
+LeRobot 和 OpenPI 使用同一套 `policy.state/action/timing`，约定如何把机器人观测和示教目标编码成模型输入与训练标签，并在部署时还原输出。训练 YAML 外层、配置版本和 checkpoint 格式由各模型仓库维护，见 [OpenPI 训练配置](../../openpi/scripts/g2/docs/training.md) 和 [LeRobot 训练配置](../../lerobot-finetune/scripts/g2/docs/training.md)。候选值与组合约束由 [contracts/policy.py](../src/g2_policy_protocol/contracts/policy.py) 校验。
 
 ## 先理解整体流程
 
-`state` 决定模型看到的机器人状态，`action` 决定模型学习的目标，`timing` 决定历史和目标对应哪些时刻。图像由 `data.cameras` 选择，任务文本由模型的数据流程处理。
+`state` 决定模型看到的机器人状态，`action` 决定模型学习的目标，`timing` 决定历史和目标对应哪些时刻。图像由各模型仓库的 `data.cameras` 选择，任务文本由模型的数据流程处理。
 
 ```text
 训练：图像、实测状态、任务文本 + 示教目标 → 按 policy 编码 → 归一化 → 模型学习
@@ -88,7 +88,9 @@ policy:
 
 要对应 UMI 从示教实测轨迹构造动作标签的方式，再设置 `action.pose.source: state`；保留 `source: action` 则仍学习指令轨迹。这里对照的是核心位姿表达；先将 TCP/flange 视为同一末端点，不涉及额外的 episode 起点朝向等输入。直接接入原始 UMI 数据还需转换数据格式、磁盘坐标和末端定义、rot6d 顺序与夹爪编码，不能只复制配置。
 
-LeRobot 可以直接使用此片段。OpenPI 自定义 YAML 是对完整默认配置的覆盖；在默认 action.pose 上只写 `delta: false` 会清空继承的 method 和 reference。
+模型输入布局由各模型适配器决定；共享 policy 只定义状态、动作、坐标和时间语义。
+
+OpenPI 和 LeRobot 的具体模型输入设置由各自仓库维护。OpenPI 自定义 YAML 是对完整默认配置的覆盖；在默认 action.pose 上只写 `delta: false` 会清空继承的 method 和 reference。
 
 ## 参考来源与序列
 

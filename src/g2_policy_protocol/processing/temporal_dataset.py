@@ -1,85 +1,58 @@
-"""G2 dataset validation, temporal sampling and sample references."""
+"""Episode-safe temporal sampling and bounded normalization reads."""
 
-import math
+import copy
+from collections import OrderedDict
+from collections.abc import Sequence
 from functools import cache, partial
+from typing import Any
 
 import numpy as np
 from scipy.spatial.transform import Rotation, Slerp
 
-from .._constants import JOINT_DIM, POSE_ARM_DIM, POSE_DIM
-from .geometry import ROTATION_WIDTHS, matrix_to_rotation, rotation_to_matrix, xyz_rot6d_to_matrix
-from .policy import KINDS, active_action, command_reference_kinds, uses_arm_base, uses_kind
+from g2_policy_protocol.contracts.dataset import action_label_column
+from g2_policy_protocol.contracts.policy import (
+    KINDS,
+    PolicySemantics,
+    command_reference_kinds,
+    uses_arm_base,
+    uses_kind,
+)
+from g2_policy_protocol.types import POSE_ARM_DIM
+
+from .geometry import (
+    ROTATION_WIDTHS,
+    matrix_to_rotation,
+    rotation_to_matrix,
+    xyz_rot6d_to_matrix,
+)
+
+# Samples retain arbitrary source columns, camera keys and task text.
+DatasetSample = dict[str, Any]
 
 _ROT6D_WIDTH = ROTATION_WIDTHS["rot6d"]
-# state.arm_base: pose of arm_base_link in base_link, xyz + rot6d (no gripper).
-_ARM_BASE_DIM = 3 + _ROT6D_WIDTH
-_COLUMN_WIDTHS = {
-    "state.arm_base": _ARM_BASE_DIM,
-    "state.pose": POSE_DIM,
-    "action.pose": POSE_DIM,
-    "state.joint": JOINT_DIM,
-    "action.joint": JOINT_DIM,
-}
 
 
-def action_label_column(policy):
-    """Disk column that holds the training action labels."""
-    kind, branch = active_action(policy)
-    return f"{branch['source']}.{kind}"
+class _NormalizationRows:
+    """Two bounded blocks of numerical columns, local to each statistics worker."""
 
+    def __init__(self, rows, columns, block_size=4096):
+        self.rows = rows.select_columns(columns).with_format("numpy")
+        self.block_size = block_size
+        self._blocks = OrderedDict()
 
-def validate_dataset_contract(features, info, policy, cameras):
-    """Check that a LeRobot dataset records everything the policy needs, in the expected frames."""
-    action = policy["action"]
-    _, label_branch = active_action(policy)
-    required = {*cameras, action_label_column(policy)}
-    required |= {f"state.{kind}" for kind in KINDS if uses_kind(policy, kind)}
-    required |= {f"action.{kind}" for kind in command_reference_kinds(policy)}
-    if uses_arm_base(policy):
-        required.add("state.arm_base")
-    missing = required - features.keys()
-    if missing:
-        raise ValueError(f"G2 dataset is missing required columns: {sorted(missing)}")
-    for key in required & _COLUMN_WIDTHS.keys():
-        if "shape" in features[key] and tuple(features[key]["shape"]) != (_COLUMN_WIDTHS[key],):
-            raise ValueError(f"G2 dataset {key} must have shape [{_COLUMN_WIDTHS[key]}]")
-    if "fps" in info:
-        fps = info["fps"]
-        if type(fps) not in (int, float) or not math.isfinite(fps) or fps <= 0:
-            raise ValueError("Dataset fps must be a positive finite number")
-    exported = info.get("wholebody_export", {})
-    for field, expected in (("ee_frame", "flange"), ("rotation", "rot6d")):
-        if field in exported and exported[field] != expected:
-            raise ValueError(f"Dataset wholebody_export.{field}={exported[field]!r} must match {expected!r}")
-    pose_frame = exported.get("pose_frame", "base_link")
-    action_parent = exported.get("action_parent_frame", pose_frame)
-    if uses_kind(policy, "pose") and pose_frame != "base_link":
-        raise ValueError(f"Dataset wholebody_export.pose_frame={pose_frame!r} must be 'base_link'")
-    reads_command_pose = "pose" in command_reference_kinds(policy) or (
-        action["pose"]["enabled"] and action["pose"]["source"] == "action"
-    )
-    if reads_command_pose and action_parent != "base_link":
-        raise ValueError(f"Dataset wholebody_export.action_parent_frame={action_parent!r} must be 'base_link'")
-    if label_branch["source"] == "action" and exported.get("action_supervision", "command") != "command":
-        raise ValueError("Dataset wholebody_export.action_supervision must match action labels")
-    if exported.get("segment_policy") == "concatenated":
-        raise ValueError("Dataset concatenates capture segments; export separate continuous episodes")
+    def __getitem__(self, index):
+        start = index // self.block_size * self.block_size
+        if start not in self._blocks:
+            self._blocks[start] = self.rows[start : start + self.block_size]
+            if len(self._blocks) > 2:
+                self._blocks.popitem(last=False)
+        self._blocks.move_to_end(start)
+        # Samples must own their arrays; callers cannot mutate the cached blocks.
+        return {key: np.asarray(values[index - start]).copy() for key, values in self._blocks[start].items()}
 
-
-def references_from_sample(sample):
-    """Map disk/sampler references to the shared geometry dictionary."""
-    sources = {
-        "state.pose": "pose",
-        "state.joint": "joint",
-        "g2.pose_history": "pose_history",
-        "g2.joint_history": "joint_history",
-        "g2.command_pose": "command_pose",
-        "g2.command_joint": "command_joint",
-        "g2.base_to_parent": "base_to_parent",
-    }
-    return {
-        f"observation/{target}": np.asarray(sample[source]) for source, target in sources.items() if source in sample
-    }
+    def __getstate__(self):
+        # Spawned workers fill their own cache without serializing cached arrays.
+        return {**self.__dict__, "_blocks": OrderedDict()}
 
 
 class TemporalDataset:
@@ -88,9 +61,18 @@ class TemporalDataset:
     Low-dimensional signals interpolate linearly, poses interpolate on SO(3).
     Images use the nearest recorded frame. No sample crosses an episode boundary.
     Histories and derived reference fields are generated only when the policy needs them.
+    A separate normalization view can cache numerical columns without retaining images.
     """
 
-    def __init__(self, dataset, policy, cameras, horizon, *, action_indices=None):
+    def __init__(
+        self,
+        dataset: Any,
+        policy: PolicySemantics,
+        cameras: Sequence[str],
+        horizon: int,
+        *,
+        action_indices: Sequence[int] | None = None,
+    ) -> None:
         self.dataset, self.policy, self.cameras = dataset, policy, cameras
         self.source_fps = float(dataset.meta.fps)
         self.sample_hz = float(policy["timing"]["sample_hz"])
@@ -98,6 +80,7 @@ class TemporalDataset:
         self.state_modalities = tuple(kind for kind in KINDS if policy["state"][kind]["enabled"])
         self.state_columns = [f"state.{kind}" for kind in KINDS if uses_kind(policy, kind)]
         self.reference_columns = [(f"g2.command_{kind}", f"action.{kind}") for kind in command_reference_kinds(policy)]
+        self._normalization_rows = None
         if uses_arm_base(policy):
             self.state_columns.append("state.arm_base")
         self.anchor_frames = []
@@ -113,8 +96,20 @@ class TemporalDataset:
                 self.anchor_frames.append(start + i * self.source_fps / self.sample_hz)
                 self.episode_bounds.append((start, stop))
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self.anchor_frames)
+
+    def normalization_dataset(self) -> "TemporalDataset":
+        """Share temporal indexing, but batch/cache low-dimensional HF reads for stats."""
+        if not hasattr(self.dataset.hf_dataset, "select_columns"):
+            return self
+        columns = set(self.state_columns) | {action_label_column(self.policy)}
+        columns.update(key for _, key in self.reference_columns)
+        result = copy.copy(self)
+        result._normalization_rows = _NormalizationRows(
+            self.dataset.hf_dataset, sorted(columns & self.dataset.meta.features.keys())
+        )
+        return result
 
     @staticmethod
     def _sample_signal(key, frame_positions, episode_bounds, read_row):
@@ -141,17 +136,20 @@ class TemporalDataset:
             samples.append(value)
         return np.asarray(samples)
 
-    def __getitem__(self, index):
+    def __getitem__(self, index: int) -> DatasetSample:
         return self.sample(index)
 
-    def sample(self, index, *, images=True):
+    def sample(self, index: int, *, images: bool = True) -> DatasetSample:
         """Sample vectors without decoding videos when computing normalization stats."""
         anchor_frame, episode_bounds = self.anchor_frames[index], self.episode_bounds[index]
         timing = self.policy["timing"]
 
-        # A sample owns its caches: no decoded images or mutable rows survive it.
+        # Training retains no rows across samples. The normalization view shares
+        # only bounded numerical blocks, never decoded images or task text.
         @cache
         def read_row(frame_position):
+            if not images and self._normalization_rows is not None:
+                return self._normalization_rows[frame_position]
             return self.dataset.hf_dataset[frame_position]
 
         @cache

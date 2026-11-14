@@ -1,7 +1,7 @@
 import asyncio
 from types import SimpleNamespace
 
-from g2_policy_protocol import codec
+from g2_policy_protocol.runtime import codec
 
 
 class FakeConnection:

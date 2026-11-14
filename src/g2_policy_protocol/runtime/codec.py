@@ -3,6 +3,7 @@
 JPEG is transported as opaque bytes. Encoding/decoding and resizing belong to
 the caller, before build_request / after parse_request respectively.
 """
+
 import base64
 import functools
 import json
@@ -13,13 +14,7 @@ from urllib.parse import parse_qs, parse_qsl, urlencode, urlsplit, urlunsplit
 import msgpack
 import numpy as np
 
-from ._constants import ENCODING_VALUES
-
-# Raw images are uint8 RGB (H, W, 3) with H, W >= 1.
-_RAW_IMAGE_DTYPE = np.dtype(np.uint8)
-IMAGE_NDIM = 3
-IMAGE_CHANNELS = 3
-IMAGE_MIN_HW = (1, 1)
+from ..types import ENCODING_VALUES
 
 
 def _dtype(value) -> np.dtype:
@@ -38,8 +33,7 @@ def _shape(value):
 def pack_array(obj):
     if isinstance(obj, np.ndarray):
         dtype = _dtype(obj.dtype)
-        return {b"__ndarray__": True, b"data": obj.tobytes(),
-                b"dtype": dtype.str, b"shape": obj.shape}
+        return {b"__ndarray__": True, b"data": obj.tobytes(), b"dtype": dtype.str, b"shape": obj.shape}
     if isinstance(obj, np.generic):
         dtype = _dtype(obj.dtype)
         return {b"__npgeneric__": True, b"data": obj.item(), b"dtype": dtype.str}
@@ -69,14 +63,16 @@ def _json_prepare(value):
     if isinstance(value, (np.ndarray, np.generic)):
         dtype = _json_dtype(value.dtype)
         scalar = isinstance(value, np.generic)
-        result = {"$g2": "scalar" if scalar else "ndarray", "dtype": dtype.str,
-                  "data": _json_prepare(value.item() if scalar else value.tolist())}
+        result = {
+            "$g2": "scalar" if scalar else "ndarray",
+            "dtype": dtype.str,
+            "data": _json_prepare(value.item() if scalar else value.tolist()),
+        }
         if not scalar:
             result["shape"] = list(value.shape)
         return result
     if isinstance(value, bytes):
-        return {"$g2": "bytes", "encoding": "base64",
-                "data": base64.b64encode(value).decode("ascii")}
+        return {"$g2": "bytes", "encoding": "base64", "data": base64.b64encode(value).decode("ascii")}
     if isinstance(value, Mapping):
         if "$g2" in value:
             raise ValueError("$g2 is reserved for JSON typed values")
@@ -120,8 +116,9 @@ def _json_restore(obj):
     if raw.size:
         if dtype.kind in "biuf" and raw.dtype.kind not in "biuf":
             raise ValueError("numeric array requires numeric JSON data")
-        if dtype.kind in "iu" and (raw.dtype.kind not in "iu" or
-                np.any(raw < np.iinfo(dtype).min) or np.any(raw > np.iinfo(dtype).max)):
+        if dtype.kind in "iu" and (
+            raw.dtype.kind not in "iu" or np.any(raw < np.iinfo(dtype).min) or np.any(raw > np.iinfo(dtype).max)
+        ):
             raise ValueError("integer JSON data is outside dtype range")
         if dtype.kind == "b" and raw.dtype.kind != "b":
             raise ValueError("boolean array requires JSON booleans")
@@ -150,23 +147,9 @@ def json_dumps(value) -> str:
 
 def json_loads(value: str | bytes | bytearray):
     """Restore the same arrays/bytes consumed by both protocol parsers."""
-    return json.loads(value, object_hook=_json_restore,
-                      parse_float=_finite_json_float, parse_constant=_reject_json_constant)
-
-
-def validate_image(value, *, encoding: str):
-    """Validate representation, without allocating pixel copies or decoding JPEG."""
-    if encoding == "jpeg":
-        if not isinstance(value, bytes) or not value:
-            raise ValueError("jpeg image must be nonempty bytes")
-        return value
-    if encoding != "raw":
-        raise ValueError(f"unsupported image encoding: {encoding!r}")
-    if (not isinstance(value, np.ndarray) or value.dtype != _RAW_IMAGE_DTYPE
-            or value.ndim != IMAGE_NDIM or value.shape[-1] != IMAGE_CHANNELS
-            or value.shape[0] < IMAGE_MIN_HW[0] or value.shape[1] < IMAGE_MIN_HW[1]):
-        raise ValueError("raw image must be nonempty RGB uint8 HxWx3")
-    return value
+    return json.loads(
+        value, object_hook=_json_restore, parse_float=_finite_json_float, parse_constant=_reject_json_constant
+    )
 
 
 def dumps(message, *, encoding="msgpack"):

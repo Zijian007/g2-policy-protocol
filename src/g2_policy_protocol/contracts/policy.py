@@ -1,15 +1,60 @@
-"""The ``policy`` section of a training config: defaults, validation and derived wire capabilities.
+"""Resolve and validate the ``policy`` section of a training config.
 
-A policy has ``state`` and ``action`` groups, each with a ``pose`` and a ``joint``
-branch, plus ``timing``. A branch says whether it is enabled, whether it is a
-delta, relative to which reference, and (for poses) in which coordinates.
+This module owns policy defaults, semantic queries, merge semantics, validation and calibration constraints.
 """
 
 import copy
 import math
+from collections.abc import Mapping
+from typing import Any, Literal, TypedDict
 
-from g2_policy_protocol import protocol
-from g2_policy_protocol.validation import validate_rigid_transform
+from ..constraints import validate_rigid_transform
+
+ArmSelection = Literal["left", "right", "both"]
+
+
+class PolicyTiming(TypedDict):
+    sample_hz: float
+    history_steps: int
+    action_horizon: int
+    target_offset_steps: int
+    stride_steps: int
+
+
+class DeltaReference(TypedDict):
+    source: Literal["state", "action"] | None
+    scope: Literal["chunk", "step"] | None
+
+
+class Coordinates(TypedDict):
+    parent_frame: Literal["base_link", "arm_base_link"]
+    ee_frame: str
+    rotation: Literal["rot6d", "quaternion", "axis_angle"]
+    flange_to_tcp: dict[str, list[list[float]]] | None
+
+
+class _BranchFields(TypedDict):
+    enabled: bool
+    delta: bool
+    method: Literal["component", "se3"] | None
+    reference: DeltaReference
+
+
+class PolicyBranch(_BranchFields, total=False):
+    """Pose branches have coordinates; action branches also have quantity and source."""
+
+    coordinates: Coordinates
+    quantity: Literal["pose", "position"]
+    source: Literal["state", "action"]
+
+
+class PolicySemantics(TypedDict):
+    state: dict[str, PolicyBranch]
+    action: dict[str, PolicyBranch]
+    timing: PolicyTiming
+
+
+# --- Read-only policy queries --------------------------------------------------
 
 SOURCES = ("state", "action")
 METHODS = ("component", "se3")
@@ -27,34 +72,32 @@ COORDINATES = {
 }
 
 
-# --- Queries shared by training, datasets and deployment ----------------------
-
-
-def active_action(policy):
-    """Return (kind, branch) of the single enabled action branch."""
+def active_action(policy: PolicySemantics) -> tuple[str, PolicyBranch]:
+    """Return the single action branch of a resolved, validated policy."""
     kind = next(kind for kind, branch in policy["action"].items() if branch["enabled"])
     return kind, policy["action"][kind]
 
 
-def control_quantity(policy):
+def control_quantity(policy: PolicySemantics) -> str:
     kind, branch = active_action(policy)
     return QUANTITIES[kind][branch["quantity"]]
 
 
-def uses_kind(policy, kind):
+def uses_kind(policy: PolicySemantics, kind: str) -> bool:
     """True when pose/joint values are needed as state or action."""
     return policy["state"][kind]["enabled"] or policy["action"][kind]["enabled"]
 
 
-def command_reference_kinds(policy):
+def command_reference_kinds(policy: PolicySemantics) -> tuple[str, ...]:
     """Kinds with an enabled branch relative to the recorded command (needs command_<kind>)."""
     return tuple(
-        kind for kind in KINDS
+        kind
+        for kind in KINDS
         if any(_relative_to_command(branch) for branch in (policy["state"][kind], policy["action"][kind]))
     )
 
 
-def uses_arm_base(policy):
+def uses_arm_base(policy: PolicySemantics) -> bool:
     """True when an enabled pose branch is expressed in arm_base_link (needs base_to_parent)."""
     return any(
         branch["enabled"] and branch["coordinates"]["parent_frame"] == "arm_base_link"
@@ -66,42 +109,10 @@ def _relative_to_command(branch):
     return branch["enabled"] and branch["delta"] and branch["reference"]["source"] == "action"
 
 
-def policy_capabilities(policy, cameras, *, prompt, reset):
-    """Derive build_metadata arguments (observation needs, timing, action layout) from a policy."""
-    timing = policy["timing"]
-    pose, joint = uses_kind(policy, "pose"), uses_kind(policy, "joint")
-    context = [f"command_{kind}" for kind in command_reference_kinds(policy)]
-    if uses_arm_base(policy):
-        context.append("base_to_parent")
-    if timing["history_steps"] > 1:
-        context.extend((["pose_history"] if pose else []) + (["joint_history"] if joint else []))
-        if cameras:
-            context.append("image_history")
-    dt = timing["stride_steps"] / timing["sample_hz"]
-    return {
-        "policy_hz": 1 / dt,
-        "requires_joint_state": joint,
-        "reset_supported": reset,
-        "action_spec": protocol.build_action_spec(control_quantity(policy)),
-        "observation_spec": {
-            "pose": pose,
-            "joint": joint,
-            "prompt": prompt,
-            "history_steps": timing["history_steps"],
-            "history_hz": timing["sample_hz"],
-            "context_keys": context,
-        },
-        "timing": {
-            "action_dt": dt,
-            "first_target_offset_s": timing["target_offset_steps"] / timing["sample_hz"],
-        },
-    }
-
-
 # --- Resolution and validation ------------------------------------------------
 
 
-def resolve_policy(raw, *, horizon, sample_hz=30.0):
+def resolve_policy(raw: Mapping[str, Any], *, horizon: int, sample_hz: float = 30.0) -> PolicySemantics:
     """Fill defaults into a partial policy and validate it once, at the configuration boundary.
 
     The model owns its prediction horizon; a copied ``timing.action_horizon`` must match it.
@@ -148,7 +159,7 @@ def merge(base, override, path=""):
                 base["method"] = None
 
 
-def validate_policy(policy):
+def validate_policy(policy: PolicySemantics) -> None:
     if not isinstance(policy, dict) or policy.keys() != {"state", "action", "timing"}:
         raise ValueError("policy fields must be state, action and timing")
     for group in SOURCES:
@@ -199,7 +210,6 @@ def _branch_defaults(group, kind):
 def _choice(value, choices, path):
     if not isinstance(value, str) or value not in choices:
         raise ValueError(f"{path} must be one of {tuple(choices)}")
-    return choices[value] if isinstance(choices, dict) else value
 
 
 def _validate_branch_fields(branch, group, kind):

@@ -2,9 +2,12 @@
 
 import numpy as np
 from g2_policy_protocol import protocol
-from g2_policy_protocol.data.encoding import ActionCodec
-from g2_policy_protocol.data.geometry import matrix_to_rotation, rotation_to_matrix
-from g2_policy_protocol.data.policy import resolve_policy
+from g2_policy_protocol.contracts.policy import resolve_policy
+from g2_policy_protocol.processing.encoding import ActionCodec
+from g2_policy_protocol.processing.geometry import (
+    matrix_to_rotation,
+    rotation_to_matrix,
+)
 
 if __name__ == "__main__":
     # Reorder a robot's wxyz quaternion explicitly; shared geometry uses xyzw.
@@ -38,7 +41,6 @@ if __name__ == "__main__":
     actions = codec.decode(model_actions, {"observation/pose": measured_pose})
     # decode also fills the inactive left arm from measured_pose.
     metadata = protocol.build_metadata(
-
         policy_hz=30,
         action_horizon=2,
         arm="right",

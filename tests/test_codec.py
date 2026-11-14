@@ -2,7 +2,8 @@
 import msgpack
 import numpy as np
 import pytest
-from g2_policy_protocol import codec
+from g2_policy_protocol import protocol
+from g2_policy_protocol.runtime import codec
 
 
 @pytest.mark.parametrize('array', [np.arange(12, dtype=np.float32).reshape(3, 4), np.arange(12, dtype='>i2')[::2], np.zeros((0, 20)), np.array(3, dtype=np.int64), np.ones((2, 3), dtype=np.bool_)])
@@ -39,16 +40,16 @@ def test_invalid_array_metadata_rejected(shape, data):
 @pytest.mark.parametrize('image', [np.zeros((2, 3, 3), dtype=np.float32), np.zeros((2, 3), dtype=np.uint8), np.zeros((0, 3, 3), dtype=np.uint8), b'jpeg'])
 def test_raw_image_representation_is_explicit(image):
     with pytest.raises(ValueError):
-        codec.validate_image(image, encoding='raw')
+        protocol.validate_image(image, encoding='raw')
 
 
 def test_jpeg_is_opaque_and_unknown_encoding_is_rejected():
     jpeg = b'compressed payload is decoded by the adapter'
-    assert codec.validate_image(jpeg, encoding='jpeg') is jpeg
+    assert protocol.validate_image(jpeg, encoding='jpeg') is jpeg
     with pytest.raises(ValueError):
-        codec.validate_image(b'', encoding='jpeg')
+        protocol.validate_image(b'', encoding='jpeg')
     with pytest.raises(ValueError):
-        codec.validate_image(jpeg, encoding='png')
+        protocol.validate_image(jpeg, encoding='png')
 
 
 @pytest.mark.parametrize('value', [np.arange(6, dtype=np.float32).reshape(2, 3), np.arange(8, dtype='>i2')[::2], np.empty((2, 0, 3), dtype=np.uint8), np.array(3, dtype=np.int64), np.float32(1.5), np.float64(1.5), np.uint64(2**64-1), np.bool_(True), np.array([True, False]), np.array(['左', '右']), np.array([b'a', b'b'])])

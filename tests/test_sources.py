@@ -1,12 +1,8 @@
 import numpy as np
 import pytest
-from g2_policy_protocol.data.sources import (
-    MixtureIndex,
-    image_size,
-    repeat_plan,
-    resolve_sources,
-)
-from g2_policy_protocol.images import resize_rgb
+from g2_policy_protocol.processing.dataset_sources import image_size, resolve_sources
+from g2_policy_protocol.processing.mixture import MixtureIndex, repeat_plan
+from g2_policy_protocol.runtime.images import resize_rgb
 
 
 def test_paths_and_legacy_configuration(tmp_path):
@@ -17,18 +13,24 @@ def test_paths_and_legacy_configuration(tmp_path):
     assert [s["path"] for s in sources] == [str(tmp_path / "data/a"), str(tmp_path / "b")]
 
 
-@pytest.mark.parametrize("data", [
-    {}, {"repo_id": "a", "sources": [{"path": "b"}]}, {"sources": []},
-    {"sources": [{"path": "a", "weight": 1}, {"path": "b"}]},
-    {"sources": [{"path": "a", "weight": float("nan")}]},
-    {"sources": [{"path": "a", "weight": True}]},
-    {"sources": [{"path": "a", "weight": "automatic"}]},
-    {"sources": [{"path": "a", "weight": "auto"}, {"path": "b", "weight": 1}]},
-    {"sources": [{"path": "a", "weight": "auto"}, {"path": "b"}]},
-    {"sources": [{"path": "a"}, {"path": "a"}]},
-    {"repo_id": "../a"}, {"sources": [{"path": "a", "repo_id": "b"}]},
-    {"sources": [{"path": "a"}], "image_size": [0, 224]},
-])
+@pytest.mark.parametrize(
+    "data",
+    [
+        {},
+        {"repo_id": "a", "sources": [{"path": "b"}]},
+        {"sources": []},
+        {"sources": [{"path": "a", "weight": 1}, {"path": "b"}]},
+        {"sources": [{"path": "a", "weight": float("nan")}]},
+        {"sources": [{"path": "a", "weight": True}]},
+        {"sources": [{"path": "a", "weight": "automatic"}]},
+        {"sources": [{"path": "a", "weight": "auto"}, {"path": "b", "weight": 1}]},
+        {"sources": [{"path": "a", "weight": "auto"}, {"path": "b"}]},
+        {"sources": [{"path": "a"}, {"path": "a"}]},
+        {"repo_id": "../a"},
+        {"sources": [{"path": "a", "repo_id": "b"}]},
+        {"sources": [{"path": "a"}], "image_size": [0, 224]},
+    ],
+)
 def test_invalid_sources(data, tmp_path):
     with pytest.raises(ValueError):
         resolve_sources(data, base_dir=tmp_path)
@@ -76,3 +78,22 @@ def test_resize_mode_stretches_without_padding():
     stretched = resize_rgb(image, (8, 8), "resize")
     assert stretched.shape == (8, 8, 3) and stretched.min() == 200
     assert resize_rgb(image, (8, 8)).min() == 0  # letterbox pads with black
+
+
+def test_source_digest_tracks_nested_shared_code(tmp_path, monkeypatch):
+    from g2_policy_protocol.processing import fingerprints
+
+    protocol_root = tmp_path / "g2_policy_protocol"
+    contract_source = protocol_root / "contracts" / "policy.py"
+    encoding_source = protocol_root / "processing" / "encoding.py"
+    for source in (contract_source, encoding_source):
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_text("original")
+    monkeypatch.setattr(fingerprints, "__file__", str(protocol_root / "processing" / "fingerprints.py"))
+    original_digest = fingerprints.source_digest()
+    assert fingerprints.source_digest() == original_digest
+    contract_source.write_text("changed policy semantics")
+    contract_digest = fingerprints.source_digest()
+    assert contract_digest != original_digest
+    encoding_source.write_text("changed action encoding")
+    assert fingerprints.source_digest() != contract_digest

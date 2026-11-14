@@ -7,16 +7,15 @@ from pathlib import Path
 import numpy as np
 import pytest
 from g2_policy_protocol import protocol as p
-from g2_policy_protocol.images import decode_image_history
-from g2_policy_protocol.diagnostics.check_server import check_action_semantics
-from g2_policy_protocol.codec import connection_uri
-from g2_policy_protocol.diagnostics.samples import (
+from g2_policy_protocol.diagnostics import (
+    check_action_semantics,
     load_sample,
-    prepare_images,
     save_sample,
     synthetic_context,
     synthetic_sample,
 )
+from g2_policy_protocol.runtime.codec import connection_uri
+from g2_policy_protocol.runtime.images import decode_image_history, prepare_images
 
 
 def test_sample_roundtrip(tmp_path):
@@ -40,7 +39,7 @@ def test_object_sample_rejected(tmp_path):
 @pytest.mark.parametrize("encoding", ["raw", "jpeg"])
 @pytest.mark.parametrize("resize", ["resize", "letterbox"])
 def test_image_preparation_and_decode(encoding, resize):
-    from g2_policy_protocol.images import decode_images
+    from g2_policy_protocol.runtime.images import decode_images
 
     sample = synthetic_sample()
     # Pure red lets us check RGB/BGR independently of JPEG loss.
@@ -52,7 +51,7 @@ def test_image_preparation_and_decode(encoding, resize):
         image_encoding=encoding,
         image_resize=resize,
     )
-    prepared = prepare_images(sample, meta)
+    prepared = prepare_images(sample["images"], meta)
     assert set(prepared) == {"head_color"}
     if encoding == "jpeg":
         assert isinstance(prepared["head_color"], bytes)
@@ -64,7 +63,7 @@ def test_image_preparation_and_decode(encoding, resize):
 
 
 def test_corrupt_jpeg_is_rejected_as_invalid_request():
-    from g2_policy_protocol.images import decode_images
+    from g2_policy_protocol.runtime.images import decode_images
 
     meta = p.build_metadata(policy_hz=30, required_cameras=["head_color"], image_encoding="jpeg")
     with pytest.raises(ValueError, match="failed to decode"):
@@ -75,30 +74,29 @@ def test_missing_camera():
     sample = synthetic_sample()
     del sample["images"]["hand_right_color"]
     with pytest.raises(ValueError, match="missing required camera"):
-        prepare_images(sample, p.build_metadata(policy_hz=30))
+        prepare_images(sample["images"], p.build_metadata(policy_hz=30))
 
 
 def test_empty_synthetic_context_does_not_read_or_prepare_sample(monkeypatch):
-    from g2_policy_protocol.diagnostics import samples
+    from g2_policy_protocol import diagnostics
 
     def unexpected(*args, **kwargs):
         pytest.fail("unrequested context must not prepare images")
 
-    monkeypatch.setattr(samples, "prepare_images", unexpected)
+    monkeypatch.setattr(diagnostics, "prepare_images", unexpected)
     meta = p.build_metadata(policy_hz=30, required_cameras=[])
     assert synthetic_context({}, meta) == {}
 
 
 def test_vector_synthetic_context_does_not_prepare_images(monkeypatch):
-    from g2_policy_protocol.diagnostics import samples
+    from g2_policy_protocol import diagnostics
 
     def unexpected(*args, **kwargs):
         pytest.fail("vector context must not prepare images")
 
-    monkeypatch.setattr(samples, "prepare_images", unexpected)
+    monkeypatch.setattr(diagnostics, "prepare_images", unexpected)
     keys = ["start_pose", "command_joint", "pose_history", "joint_history", "base_to_parent"]
     meta = p.build_metadata(
-
         policy_hz=30,
         required_cameras=[],
         observation_spec=dict(pose=True, joint=True, prompt=True, history_steps=3, history_hz=30, context_keys=keys),
@@ -114,10 +112,9 @@ def test_vector_synthetic_context_does_not_prepare_images(monkeypatch):
     np.testing.assert_array_equal(context["base_to_parent"], np.eye(4))
 
 
-@pytest.mark.parametrize('image_encoding', ['raw', 'jpeg'])
+@pytest.mark.parametrize("image_encoding", ["raw", "jpeg"])
 def test_synthetic_image_history_uses_negotiated_cameras_and_size(image_encoding):
     meta = p.build_metadata(
-
         policy_hz=30,
         required_cameras=["head_color"],
         image_encoding=image_encoding,
@@ -131,12 +128,12 @@ def test_synthetic_image_history_uses_negotiated_cameras_and_size(image_encoding
     assert set(context) == {"image_history"}
     assert set(context["image_history"]) == {"head_color"}
     history = context["image_history"]["head_color"]
-    if image_encoding == 'jpeg':
+    if image_encoding == "jpeg":
         assert isinstance(history, list) and len(history) == 2
-        assert history[0] == history[1] == prepare_images(sample, meta)['head_color']
-        history = decode_image_history(context['image_history'], meta)['head_color']
+        assert history[0] == history[1] == prepare_images(sample["images"], meta)["head_color"]
+        history = decode_image_history(context["image_history"], meta)["head_color"]
     else:
-        np.testing.assert_array_equal(history[0], prepare_images(sample, meta)["head_color"])
+        np.testing.assert_array_equal(history[0], prepare_images(sample["images"], meta)["head_color"])
     assert history.shape == (2, 8, 10, 3) and history.dtype == np.uint8
     np.testing.assert_array_equal(history[0], history[1])
 
@@ -179,7 +176,7 @@ def test_model_adapter_example_uses_shared_conventions():
 @pytest.mark.parametrize("outcome", ["success", "inference_error", "invalid_request"])
 def test_policy_instance_request_response(encoding, outcome):
     from conftest import FakeConnection
-    from g2_policy_protocol.server import PolicyServer
+    from g2_policy_protocol.runtime.server import PolicyServer
 
     example = runpy.run_path(str(Path(__file__).resolve().parents[1] / "examples/minimal_server.py"))
     meta = p.build_metadata(policy_hz=30, action_horizon=2, required_cameras=["head_color"])
@@ -195,8 +192,11 @@ def test_policy_instance_request_response(encoding, outcome):
             return super().infer(observation)
 
     request = p.build_request(
-        request_id=42, prompt=sample["prompt"], state=sample["state"],
-        images={"head_color": image}, metadata=meta,
+        request_id=42,
+        prompt=sample["prompt"],
+        state=sample["state"],
+        images={"head_color": image},
+        metadata=meta,
     )
     if outcome == "invalid_request":
         del request["state"]
@@ -224,6 +224,38 @@ def test_policy_instance_request_response(encoding, outcome):
         finally:
             handler.cancel()
             await asyncio.gather(handler, return_exceptions=True)
+            server._worker.shutdown(wait=True)
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("encoding", ["msgpack", "json"])
+@pytest.mark.parametrize("image_encoding", ["raw", "jpeg"])
+def test_minimal_client_and_server_exchange_over_websocket(encoding, image_encoding):
+    from g2_policy_protocol.runtime.server import PolicyServer
+    from websockets.asyncio.server import serve
+
+    examples = Path(__file__).resolve().parents[1] / "examples"
+    backend = runpy.run_path(str(examples / "minimal_server.py"))["MockPolicy"]
+    exchange = runpy.run_path(str(examples / "minimal_client.py"))["exchange"]
+    meta = p.build_metadata(
+        policy_hz=30,
+        action_horizon=2,
+        required_cameras=["head_color"],
+        image_sizes={"head_color": [8, 12]},
+        image_encoding=image_encoding,
+    )
+
+    async def run():
+        server = PolicyServer(backend(metadata=meta), metadata=meta)
+        try:
+            async with serve(server._handler, "127.0.0.1", 0, compression=None) as listener:
+                port = listener.sockets[0].getsockname()[1]
+                actions = await asyncio.to_thread(exchange, f"ws://127.0.0.1:{port}", encoding=encoding)
+                assert actions.shape == (2, 20) and actions.dtype == np.float32
+                expected = np.tile([0.35, 0, 0.5, 1, 0, 0, 0, 1, 0, 0], (2, 2)).astype(np.float32)
+                np.testing.assert_array_equal(actions, expected)
+        finally:
             server._worker.shutdown(wait=True)
 
     asyncio.run(run())

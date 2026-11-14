@@ -121,17 +121,15 @@ G2_PROTOCOL_WHEELS=/path/to/wheels bash scripts/bootstrap.sh     # LeRobot 根�
 
 ## 兼容性如何保证
 
-两端不需要逐字节相同，只需要线上契约相同：
+两端的 Python 源码可以不同，但连接两端必须理解同一个 `g2.policy.v3` 线上契约。
 
-- **结构变化**（增删字段、改枚举、改动作布局、改字段表示）：握手或请求的严格校验会拒绝不兼容格式，新校验器在格式不匹配时提示 `the client and server may run different g2-policy-protocol versions`；旧校验器可能只有格式错误。按提示更新落后的一端，重启后再连。
-- **语义变化**（坐标约定、单位、夹爪方向、字段含义等结构不变但意义改变的改动）：严格校验发现不了，因此**必须把 `_constants.py` 的 `PROTOCOL` 升一版**（如 `g2.policy.v4`），握手会拒绝版本不同的另一端。
-- **内部改动**（修 bug、重构、数据层工具）：两端可以各自更新。
+- **结构变化**：新增/删除字段、枚举、动作维度或图像表示会在握手或请求校验阶段失败，并提示两端可能使用了不同版本。
+- **语义变化**：坐标系、单位、夹爪方向、历史顺序或字段含义发生变化时，必须升级 `src/g2_policy_protocol/types.py` 中的 `PROTOCOL`，例如改为 `g2.policy.v4`。
+- **内部变化**：修复实现、整理文件或修改训练辅助算法，只需同步有实际依赖的一端。
 
-更新时先更新并重启 GPU server，再启动域控 client。
+当前图像历史规则是：当 metadata 声明 `context.image_history` 时，历史从旧到新排列，最后一帧是当前帧；raw 使用 `uint8 (L,H,W,3)`，JPEG 使用每帧一个 bytes 的列表。客户端可以省略重复的 `images`，服务端运行时把历史解码后交给 `Observation.images`。详情以[通信协议](protocol.md#数据约定)为准。
 
-JPEG 图像历史的格式已从 raw 数组改为 JPEG bytes 列表，`g2.policy.v3` 不变；混用新旧编码实现会在首个相关请求中失败，此编码格式变更不影响 raw 或无图像历史的请求。需要同时更新协议包、wholebody 客户端和对应模型服务的适配代码，再重启服务。
-
-有图像历史时，客户端还会省略重复的 `images`，适用于 raw/JPEG。新服务端接受旧客户端仍发送 `images` 的请求；新客户端连接仍要求 `images` 的旧协议实现时，首个历史请求会报缺少字段。先更新 GPU 侧协议包及支持图像历史的 backend，再更新客户端。第三方 backend 需按 [接入模型示例](protocol.md#接入模型server-侧) 优先读取历史，不能假设每个请求都有 `images`。
+推荐更新顺序：先更新并重启 GPU server，再更新域控 client。升级后用 `g2-policy-check` 和 `tools/check_stack.py` 验证，最后再接入真实控制环。
 
 ## 常见问题
 

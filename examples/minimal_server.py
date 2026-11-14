@@ -4,20 +4,20 @@ import argparse
 import logging
 
 import numpy as np
+
 from g2_policy_protocol import protocol
-from g2_policy_protocol.images import decode_images
-from g2_policy_protocol.server import PolicyServer
+from g2_policy_protocol.runtime.server import PolicyServer
+from g2_policy_protocol.types import InferenceResult, Metadata, Observation
 
 
 class MockPolicy:
     """Replace this stateless mock with your model and input/output adapter."""
 
-    def __init__(self, *, metadata):
+    def __init__(self, *, metadata: Metadata):
         self.metadata = metadata
 
-    def infer(self, observation):
-        # A real model feeds these RGB uint8 arrays (JPEG decoded if negotiated) to its network.
-        decode_images(observation["images"], self.metadata)
+    def infer(self, observation: Observation) -> InferenceResult:
+        # observation["images"] already contains RGB arrays, independent of transport.
         actions = np.repeat(observation["state"][None, :], self.metadata["action_horizon"], axis=0)
         return {"actions": actions}
 

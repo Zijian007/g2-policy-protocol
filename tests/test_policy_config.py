@@ -4,11 +4,11 @@ import copy
 
 import numpy as np
 import pytest
+from g2_policy_protocol.capabilities import policy_capabilities
+from g2_policy_protocol.contracts.policy import resolve_policy
+from g2_policy_protocol.processing.encoding import ActionCodec, encode_state
+from g2_policy_protocol.processing.geometry import matrix_to_pose
 from scipy.spatial.transform import Rotation
-
-from g2_policy_protocol.data.encoding import ActionCodec, encode_state
-from g2_policy_protocol.data.geometry import matrix_to_pose
-from g2_policy_protocol.data.policy import policy_capabilities, resolve_policy
 
 
 def transform(position, angles):
@@ -96,6 +96,50 @@ def test_state_history_uses_the_configured_method_and_chunk_reference(method, ro
     np.testing.assert_allclose(actual, expected, atol=1e-6)
 
 
+@pytest.mark.parametrize("rotation", ["rot6d", "quaternion", "axis_angle"])
+@pytest.mark.parametrize("arm", ["both", "left", "right"])
+@pytest.mark.parametrize("horizon", [1, 50])
+def test_se3_chunk_keeps_distinct_arm_references_and_absolute_grippers(rotation, arm, horizon):
+    rng = np.random.default_rng(42)
+    positions = rng.normal(size=(horizon + 1, 2, 3))
+    rotations = Rotation.random((horizon + 1) * 2, random_state=rng).as_matrix().reshape(-1, 2, 3, 3)
+    matrices = np.broadcast_to(np.eye(4), (horizon + 1, 2, 4, 4)).copy()
+    matrices[..., :3, :3] = rotations
+    matrices[..., :3, 3] = positions
+    grippers = rng.uniform(size=(horizon + 1, 2))
+    wire = matrix_to_pose(matrices, grippers).reshape(horizon + 1, 20)
+    policy = resolve_policy(
+        {
+            "action": {
+                "pose": {
+                    "coordinates": {"rotation": rotation},
+                    "delta": True,
+                    "method": "se3",
+                    "reference": {"source": "state", "scope": "chunk"},
+                }
+            }
+        },
+        horizon=horizon,
+    )
+    observation = {"observation/pose": wire[0]}
+    codec = ActionCodec(policy, arm)
+    actual = codec.encode(wire[1:], observation)
+
+    # Independent rigid-body equations catch timestep/arm broadcasting mistakes.
+    relative = np.broadcast_to(np.eye(4), (horizon, 2, 4, 4)).copy()
+    reference_rotation = rotations[0].swapaxes(-1, -2)
+    relative[..., :3, :3] = reference_rotation @ rotations[1:]
+    relative[..., :3, 3] = (reference_rotation @ (positions[1:] - positions[0])[..., None])[..., 0]
+    selection = slice(None) if arm == "both" else slice(0, 1) if arm == "left" else slice(1, 2)
+    expected = matrix_to_pose(relative[:, selection], grippers[1:, selection], rotation).reshape(horizon, -1)
+    np.testing.assert_allclose(actual, expected, atol=2e-6)
+    restored = codec.decode(actual, observation).reshape(horizon, 2, 10)
+    np.testing.assert_allclose(restored[:, selection], wire[1:].reshape(horizon, 2, 10)[:, selection], atol=2e-6)
+    np.testing.assert_array_equal(
+        actual.reshape(horizon, 2 if arm == "both" else 1, -1)[..., -1], grippers[1:, selection].astype(np.float32)
+    )
+
+
 @pytest.mark.parametrize(
     "spec,message",
     [
@@ -146,10 +190,17 @@ def test_model_horizon_is_validated_at_the_shared_boundary(horizon):
         resolve_policy({}, horizon=horizon)
 
 
-@pytest.mark.parametrize("key,value", [
-    ("history_steps", 0), ("stride_steps", True), ("target_offset_steps", -1),
-    ("sample_hz", float("nan")), ("sample_hz", float("inf")), ("sample_hz", 0),
-])
+@pytest.mark.parametrize(
+    "key,value",
+    [
+        ("history_steps", 0),
+        ("stride_steps", True),
+        ("target_offset_steps", -1),
+        ("sample_hz", float("nan")),
+        ("sample_hz", float("inf")),
+        ("sample_hz", 0),
+    ],
+)
 def test_invalid_timing_is_rejected_without_a_framework_validator(key, value):
     with pytest.raises(ValueError, match=f"policy.timing.{key}"):
         resolve_policy({"timing": {key: value}}, horizon=3)
@@ -181,9 +232,7 @@ def test_se3_action_advertises_only_the_needed_command_context(source, context):
 
 def test_relative_labels_do_not_mutate_config_or_observations():
     raw = {
-        "action": {
-            "pose": {"delta": True, "method": "component", "reference": {"source": "action", "scope": "step"}}
-        }
+        "action": {"pose": {"delta": True, "method": "component", "reference": {"source": "action", "scope": "step"}}}
     }
     original = copy.deepcopy(raw)
     policy = resolve_policy(raw, horizon=3)
@@ -216,7 +265,7 @@ def test_joint_se3_is_rejected():
 def test_codec_rejects_removed_twist_in_saved_numerical_contract():
     policy = resolve_policy({}, horizon=3)
     policy["action"]["pose"]["quantity"] = "twist"
-    with pytest.raises(ValueError, match='Unsupported G2 control quantity'):
+    with pytest.raises(ValueError, match="Unsupported G2 control quantity"):
         ActionCodec(policy).encode(np.zeros((3, 14)), {})
 
 
@@ -236,9 +285,15 @@ def test_action_boundaries_reject_nonfinite_wire_and_padded_model_values(arm, in
 
 @pytest.mark.parametrize("kind,width", [("pose", 20), ("joint", 16)])
 def test_state_boundary_rejects_nonfinite_history_before_conversion(kind, width):
-    policy = resolve_policy({"state": {
-        "pose": {"enabled": kind == "pose"}, "joint": {"enabled": kind == "joint"},
-    }}, horizon=3)
+    policy = resolve_policy(
+        {
+            "state": {
+                "pose": {"enabled": kind == "pose"},
+                "joint": {"enabled": kind == "joint"},
+            }
+        },
+        horizon=3,
+    )
     values = np.zeros(width, np.float32)
     values[-1] = np.nan
     with pytest.raises(ValueError, match="finite"):
@@ -248,6 +303,12 @@ def test_state_boundary_rejects_nonfinite_history_before_conversion(kind, width)
 @pytest.mark.parametrize("quantity", ["velocity", "torque"])
 def test_removed_joint_quantities_are_rejected(quantity):
     with pytest.raises(ValueError, match="policy.action.joint.quantity"):
-        resolve_policy({"action": {
-            "pose": {"enabled": False}, "joint": {"enabled": True, "quantity": quantity},
-        }}, horizon=3)
+        resolve_policy(
+            {
+                "action": {
+                    "pose": {"enabled": False},
+                    "joint": {"enabled": True, "quantity": quantity},
+                }
+            },
+            horizon=3,
+        )

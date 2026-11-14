@@ -1,6 +1,6 @@
 # 通信协议 g2.policy.v3
 
-[README](../README.md) · [安装](install.md) · [policy 配置](policy-config.md)
+[README](../README.md) · [开发入口](developing.md) · [安装](install.md) · [policy 配置](policy-config.md)
 
 域控上的 wholebody 是 **client**，GPU 上的模型服务（OpenPI、LeRobot 或第三方）是 **server**。两者通过 WebSocket 交换三种核心消息：
 
@@ -12,11 +12,13 @@ client（域控）                           server（GPU）
    │            ②③ 循环 ...              │
 ```
 
+WebSocket 建立后由 server 先发送 metadata；client 校验通过后直接发送 obs，没有额外握手确认消息。
+JSON/MessagePack 由 URL 的 `encoding` 参数选择，raw/JPEG 由 metadata 声明。
 本页先讲跑通这个循环需要知道的内容，再讲按需开启的[可选能力](#可选能力)。
 
 ## 一次完整交互
 
-server 用 `build_metadata` 声明能力，两端所有 `build_*` / `parse_*` 都传入这同一份 metadata：
+server 用 `build_metadata` 声明能力；client 校验收到的声明后，后续观测和动作的构造/解析都使用该 metadata：
 
 ```python
 from g2_policy_protocol import protocol as p
@@ -66,7 +68,7 @@ actions = p.parse_response(response, request_id=1, metadata=metadata)
 - **夹爪**：绝对闭合比例，0 为全开，1 为全闭。
 - **关节向量 joint16**：每臂 7 个关节角（rad）加夹爪，左臂在前。
 
-**动作**：server 返回的永远是上述格式的**绝对目标**，形状为 `(步数, 20)`，步数为 1 到 `action_horizon`。
+**动作**：server 返回完整双臂**绝对目标**，pose_target 为 `(步数, 20)`，joint_position 为 `(步数, 16)`，步数为 1 到 `action_horizon`。
 
 - 单臂模型（`arm="right"`）也要返回完整 20 维，未执行一侧填当前实测值。
 - 模型内部用的增量、其他旋转表示、补齐维度等，都由 server 适配层还原后再返回。
@@ -75,11 +77,17 @@ actions = p.parse_response(response, request_id=1, metadata=metadata)
 
 **图像**：RGB uint8，形状 H×W×3，相机名为 `head_color`、`hand_left_color`、`hand_right_color`。client 按 metadata 声明的尺寸缩放，按声明的方式编码，server 收到后再解码。
 
-当前帧和 `context.image_history` 都跟随 `image_encoding`：`raw` 历史是 `uint8 (L,H,W,3)` 数组，`jpeg` 历史是长度为 L 的非空 JPEG `bytes` 列表，从旧到新，最后一帧为当前帧。协议核心只校验 JPEG 的表示；backend 解码并检查尺寸，非法图像返回 `invalid_request`。
+当前帧和 `context.image_history` 都跟随 `image_encoding`：`raw` 历史是 `uint8 (L,H,W,3)` 数组，`jpeg` 历史是长度为 L 的非空 JPEG `bytes` 列表，从旧到新，最后一帧为当前帧。协议核心只校验 JPEG 的表示；共享服务运行时在模型工作线程解码并检查尺寸，非法图像返回 `invalid_request`。
 
-有完整 `context.image_history` 时可省略 `images`，backend 直接使用历史（包含当前帧），请求解析也不补建 `images`。无图像历史时仍须发送 `images`（不需要相机时发 `{}`）。两者都发送的旧请求仍会校验并接受；第一方客户端只发送历史，避免重复缩放、编码、打包和传输当前帧。
+有完整 `context.image_history` 时可省略 `images`，共享运行时将解码后的历史交给 backend 的 `Observation.images`（包含当前帧），线上请求解析不补建 `images`。无图像历史时仍须发送 `images`（不需要相机时发 `{}`）。两者都发送的旧请求仍会校验并接受；第一方客户端只发送历史，避免重复缩放、编码、打包和传输当前帧。
 
 ## 握手 metadata
+
+公共结构类型位于 `g2_policy_protocol.types`：`Metadata`、`ObservationSpec`、`ActionSpec`、`TimingSpec`，以及后端构造参数 `MetadataOptions`。观测、context、推理结果和响应也在同一文件定义，见[开发入口](developing.md#数据经过哪些边界)。它们是 `TypedDict`，线上仍使用普通 JSON/MessagePack 字典，兼容 Python 3.10。消息允许/必填字段由对应类型定义生成，数值范围、枚举、形状及字段间关系继续由运行时校验负责。
+
+G2 后端从已解析的 checkpoint policy 契约生成观测与时序。LeRobot 和 OpenPI 的正式 G2 部署入口都要求 checkpoint 契约；OpenPI 不再在契约缺失时回退到默认频率和单帧观测。OpenPI 的 `policy_contract` 是已解析的公共 policy 语义；LeRobot manifest 的同名字段是包含公共语义的签名检查记录，两者不要求使用相同的 checkpoint 存储格式。
+
+`observation_spec.joint` 是关节输入需求的唯一派生来源。`build_metadata` 自动生成 wire 字段 `requires_joint_state`；调用方仍可用同名参数构造默认观测要求，但与显式 `observation_spec` 冲突时直接拒绝。接收端继续检查两个 wire 字段一致，因此现有客户端格式不变。
 
 `build_metadata` 的参数里，**通常只需要设置下面这些**，其余字段会自动推导出一致的值：
 
@@ -124,7 +132,7 @@ wholebody 只执行已绑定执行器的控制量，否则会在打开硬件前�
 
 `history_steps > 1` 时，obs 必须带 `observation_time_ns`（client 本机单调时钟）。server 不会把它和自己的时钟比较。
 
-这些声明通常不手写：训练配置经 `data.policy.policy_capabilities` 自动生成，见 [policy 配置](policy-config.md)。
+这些声明通常不手写：训练配置经 `capabilities.policy_capabilities` 自动生成，见 [policy 配置](policy-config.md)。
 
 ### RTC（推理期间的动作衔接）
 
@@ -135,7 +143,7 @@ server 设 `rtc_supported=True` 后，client 可以在 obs 中附加三个字段
 | obs 字段 | 含义 |
 |---|---|
 | `rtc_enabled` | 本次请求是否使用 RTC |
-| `prev_chunk_left_over` | 上一段动作中尚未执行的部分，形状 `(步数, 20)` |
+| `prev_chunk_left_over` | 上一段动作中尚未执行的部分，形状 `(步数, action_spec.dim)` |
 | `inference_delay` | 预计推理期间会执行掉的步数，须小于 `action_horizon`，且不超过上一项的步数 |
 
 如何利用这些信息约束新动作，属于模型算法（例如 OpenPI 的引导采样），不在协议范围内。
@@ -150,7 +158,7 @@ server 设 `reset_supported=True` 后，client 可以在新任务开始时发 `{
 
 ## 编解码
 
-用 `codec.dumps(message, encoding=...)` 和 `codec.loads(frame, encoding=...)` 编解码。默认 MessagePack，URL 带 `?encoding=json` 时整条连接改用 JSON。
+用 `g2_policy_protocol.runtime.codec.dumps(message, encoding=...)` 和 `g2_policy_protocol.runtime.codec.loads(frame, encoding=...)` 编解码。默认 MessagePack，URL 带 `?encoding=json` 时整条连接改用 JSON。
 
 MessagePack 中的 NumPy 数组采用与 OpenPI 兼容的格式，不使用 pickle。JSON 中数组和字节的表示如下：
 
@@ -163,17 +171,16 @@ MessagePack 中的 NumPy 数组采用与 OpenPI 兼容的格式，不使用 pick
 
 ## 接入模型（server 侧）
 
-`PolicyServer` 负责连接、编解码、校验、请求 ID 和错误响应，你只需要实现 backend 的 `infer`：
+`PolicyServer` 负责连接、编解码、图像解码、校验、请求 ID 和错误响应，你只需要实现 backend 的 `infer`：
 
 ```python
-from g2_policy_protocol.images import decode_image_history, decode_images
-from g2_policy_protocol.server import PolicyServer
+from g2_policy_protocol.runtime.server import PolicyServer
+from g2_policy_protocol.types import InferenceResult, Observation
 
 class Backend:
-    def infer(self, request):                    # request 已通过校验
-        history = request["context"].get("image_history")
-        images = (decode_images(request["images"], metadata) if history is None
-                  else decode_image_history(history, metadata))  # 历史包含当前帧
+    def infer(self, request: Observation) -> InferenceResult:
+        # 已校验的 RGB uint8；当前帧 (H,W,3)，历史 (L,H,W,3)，历史包含当前帧。
+        images = request["images"]
         actions = ...                            # 模型推理，并还原为 (步数, 20) 绝对位姿
         return {"actions": actions}
     # 可选：new_session() 为每条连接建独立状态；reset() 配合 reset_supported=True
@@ -181,17 +188,23 @@ class Backend:
 PolicyServer(Backend(), metadata=metadata, host="0.0.0.0", port=8000).serve_forever()
 ```
 
-- 所有连接的 `infer` / `reset` 在同一个模型线程上依次执行，网络收发不会被阻塞。
-- 训练和部署共用 `data.encoding.ActionCodec` 来还原动作，用法见 [examples/model_adapter.py](../examples/model_adapter.py)。最小可运行服务见 [examples/minimal_server.py](../examples/minimal_server.py)。
+- 只有 `infer` 是最小 backend 的必需方法。`PolicySessionFactory.new_session` 和 `ResettablePolicyBackend.reset` 分别描述独立会话和 episode reset 能力，无需继承接口；可只提供工厂，服务端会校验其返回的实际 session。
+- 所有连接的 `infer` / `reset` 在同一个模型线程上依次执行，网络收发不会被阻塞。backend 的模型、传输职责及状态归属见[完整开发路径](developing.md#写服务端)。
+- 图像历史由运行时从 `context.image_history` 移入 `Observation.images`；其余 context 保持不变。`server_timing.decode_ms/infer_ms/unpack_ms/process_ms` 由运行时记录，模型内部计时放在 `policy_timing`。
+- 训练和部署共用 `g2_policy_protocol.processing.encoding.ActionCodec` 来还原动作，用法见 [examples/model_adapter.py](../examples/model_adapter.py)。最小可运行服务见 [examples/minimal_server.py](../examples/minimal_server.py)。
 - OpenPI 和 LeRobot 已有现成的 backend，启动方式见各自的部署文档。
 
 ## client 侧（wholebody）
 
-wholebody 的 `G2WebSocketPolicyClient` 依次做这几件事：
+自定义客户端使用 `g2_policy_protocol.runtime.client.PolicyClient`，示例见 [examples/minimal_client.py](../examples/minimal_client.py)。它与最小服务端可独立配对运行；客户端传入 RGB uint8 当前图像，公共客户端按声明缩放、编码并校验响应。历史图像由调用方采样、预先编码后通过 context 传入。
 
-1. 连接并接收 metadata，用 `validate_metadata` 校验。频率不符、需要 RTC 但 server 不支持、控制量没有对应执行器，都会在打开硬件前拒绝。
+wholebody 的 `G2WebSocketPolicyClient` 复用共享客户端，保留 `task/pose` 参数和 OpenCV 图像优化；控制层负责执行器能力检查。完整过程是：
+
+1. 连接并接收 metadata，用 `validate_metadata` 校验。频率不符或需要 RTC 但 server 不支持时立即拒绝；wholebody 在打开硬件前检查控制量是否有对应执行器。
 2. 按 metadata 采集观测、缩放和编码图像，发送 obs。
 3. 用 `parse_response` 校验响应，通过后才交给控制层。校验失败或收到 error 时不执行动作，关闭连接并上报。
+
+公共客户端只重试连接尝试，不重发推理或 reset。超时、断线或非法响应会关闭当前连接并抛异常；`cancel_pending()` 可中断等待并禁止该实例重连。恢复、历史采样与动作调度由调用方负责。
 
 编码方式由推理 YAML 的 `wire_encoding` 选择。细节见 [wholebody policy 通信契约](../../wholebody/docs/dev/policy-protocol.md)。
 
@@ -205,7 +218,7 @@ g2-policy-check --url ws://<gpu-host>:8000 --sample observation.npz --rtc --repo
 
 `g2-policy-check` 用 MessagePack 和 JSON 各发两次合成观测，检查握手、响应 ID 和动作形状，并额外检查夹爪在 [0, 1] 内、rot6d 没有退化（`--protocol-only` 跳过这两项）。退出码 0 表示通过。
 
-通过只说明协议接入正确，不代表模型质量、坐标系正确或满足实时性。要用真实数据测试，可以用 `diagnostics.samples.save_sample` 把一帧观测导出为 `.npz`。
+通过只说明协议接入正确，不代表模型质量、坐标系正确或满足实时性。要用真实数据测试，可以用 `diagnostics.save_sample` 把一帧观测导出为 `.npz`。
 
 ## 常见错误
 
