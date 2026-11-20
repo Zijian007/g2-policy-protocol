@@ -11,6 +11,7 @@
 | 开发一个客户端或服务端 | [开发入口](docs/developing.md) | [最小客户端](examples/minimal_client.py)、[最小服务端](examples/minimal_server.py) |
 | 自定义线上消息或排查兼容性 | [通信协议](docs/protocol.md) | `src/g2_policy_protocol/types.py`、`protocol.py` |
 | 配置状态、动作、历史和坐标 | [Policy 配置](docs/policy-config.md) | `contracts/policy.py`、`contracts/dataset.py` |
+| 理解 wholebody 导出的 LeRobot 数据 | [LeRobot 数据格式](docs/lerobot-format.md) | raw、逻辑列、向量布局、v2.1/v3 边界 |
 | 安装到 wholebody、OpenPI 或 LeRobot | [安装与兼容性](docs/install.md) | 对应仓库的 bootstrap 和部署文档 |
 | 修改共享实现 | [开发入口](docs/developing.md) | `runtime/client.py`、`runtime/server.py`、`processing/encoding.py` |
 
