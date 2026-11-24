@@ -109,30 +109,19 @@ state.pose / action.pose
 
 ## 2. 格式边界
 
-G2 数据链路有三层格式：
-
 ```text
-wholebody raw
-  meta.json + frames.jsonl + images/<camera>/*.jpg
-        │
-        │ 解析和字段投影
+Wholebody 采集 G2 快照与相机 JPEG
+        │  G2 插件投影并组装数据行
         ▼
-G2 LeRobot logical schema       ← 本文规范这一层
+G2 LeRobot 业务列               ← g2-policy-protocol 定义
   state.* / action.* / observation.images.*
-        │
-        │ v2.1/v3.0 writer
+        │  episode_recorder 整理并写入
         ▼
-LeRobot physical storage
+LeRobot v2.1 / v3.0 物理目录
   meta/ + data/ + videos/
 ```
 
-职责分别是：
-
-- `wholebody raw`：保存原始 state、command、时间和图像路径。
-- G2 logical schema：规定导出后的列名、维度、布局和语义。
-- LeRobot physical storage：规定 v2.1/v3.0 的 Parquet、视频和 metadata 组织。
-
-本仓库规范第二层。raw 的完整字段和物理写入实现位于 `wholebody`。
+G2 业务列由训练、回放和部署共用。当前录制过程由 Wholebody G2 插件与通用录制服务协作完成。旧 Wholebody 导出器消费历史 `raw/` 目录，其 v2.1 追加规则见 [Wholebody 数据集指南](../../wholebody/docs/user/collect/datasets.md#追加一致性与并发锁)。[数采仓库分工](../../wholebody/docs/dev/data-collect.md#数采仓库分工)
 
 ## 3. Feature 解释
 
@@ -176,7 +165,7 @@ EE frame:                  flange / arm_*_end_link
 rotation representation:   rot6d
 ```
 
-raw 中可以使用四元数 `orientation_wxyz`，但导出到 LeRobot 后使用 `rot6d`。
+Wholebody 快照使用四元数 `orientation_wxyz`，LeRobot 的位姿列使用 `rot6d`。
 
 ### 3.3 身体其他部件
 
@@ -192,7 +181,7 @@ state.arm_base [9]   arm_base_link 在 base_link 下的 xyz + rot6d
 
 ### 3.4 图像
 
-raw 相机短名映射为：
+相机短名映射为：
 
 ```text
 head_color       -> observation.images.head_color
@@ -285,48 +274,9 @@ policy:
 
 `validate_dataset_contract()` 会根据 policy 检查相关字段、维度、fps 和这些 metadata 约定。
 
-## 6. Raw 到 logical schema 的映射
+## 6. 快照到业务列
 
-wholebody raw 的主要字段映射如下：
-
-```text
-raw state.arm.left.joint
-    -> state.joint[0:7]
-raw state.gripper.left.close_01
-    -> state.joint[7]
-raw state.arm.right.joint
-    -> state.joint[8:15]
-raw state.gripper.right.close_01
-    -> state.joint[15]
-
-raw state.arm.left.pose + gripper
-    -> state.pose[0:10]
-raw state.arm.right.pose + gripper
-    -> state.pose[10:20]
-
-raw action.arm.*.joint + action.gripper.*.close_01
-    -> action.joint
-raw action.arm.*.pose + action.gripper.*.close_01
-    -> action.pose
-
-raw images/<camera>/*.jpg
-    -> observation.images.<camera>
-```
-
-raw 的完整 schema 不在本仓库重复定义，见：
-
-```text
-wholebody/docs/user/collect/schema.md
-```
-
-实际投影和写入代码见：
-
-```text
-wholebody/external_services/data_collect/export/features.py
-wholebody/external_services/data_collect/export/append_common.py
-wholebody/external_services/data_collect/export/append_v21.py
-wholebody/external_services/data_collect/export/append_v3.py
-```
+Wholebody 的 `FrameLayout` 按 G2 契约组装关节、位姿和夹爪数值列。G2 插件声明相机和插值通道，并提供帧投影入口。 [G2 布局](../../wholebody/external_services/data_collect/recorder/layout.py) · [G2 录制插件](../../wholebody/external_services/data_collect/episode_recorder_bridge/recorder_plugin.py)
 
 ## 7. 必需字段
 
@@ -407,13 +357,12 @@ wholebody：可以导出 v2.1、v3.0 或 both
    `src/g2_policy_protocol/contracts/dataset.py`
 3. policy 如何选择 state/action/reference：
    `src/g2_policy_protocol/contracts/policy.py`
-4. raw 到 LeRobot 的实际投影和 v2.1/v3 写入：
-   `wholebody/external_services/data_collect/export/`
+4. 从快照到业务列及旧库兼容策略见 [Wholebody 数采实现](../../wholebody/docs/dev/data-collect.md)。v2.1/v3.0 写入和提交恢复见 [episode_recorder](../../episode_recorder/docs/integration.md)。
 
 ## 相关文档
 
 - G2 policy 字段、坐标和采样语义：[`policy-config.md`](policy-config.md)
-- wholebody raw 字段：`../wholebody/docs/user/collect/schema.md`
-- wholebody raw 导出：`../wholebody/docs/user/collect/export.md`
+- [Wholebody 列名与坐标约定](../../wholebody/docs/user/collect/schema.md)
+- [Wholebody 数据集与新旧 v2.1 兼容](../../wholebody/docs/user/collect/datasets.md)
 - OpenPI G2 dataset adapter：`../openpi/src/openpi/adapters/g2/`
 - LeRobot G2 dataset adapter：`../lerobot-finetune/src/lerobot_finetune/adapters/g2/`
