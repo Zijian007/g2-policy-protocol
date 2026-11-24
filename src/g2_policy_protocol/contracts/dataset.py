@@ -16,12 +16,16 @@ from typing import Any
 
 from g2_policy_protocol.types import (
     CAMERA_IDS,
+    EE_FRAME,
+    FRAME,
     JOINT_ARM_DIM,
     JOINT_DIM,
     JOINT_FIELDS,
+    JOINT_SIDE_UNITS,
     POSE_ARM_DIM,
     POSE_DIM,
     POSE_FIELDS,
+    POSE_SIDE_UNITS,
     SIDES,
 )
 
@@ -111,11 +115,33 @@ class CameraKeys:
 
 
 @dataclass(frozen=True, slots=True)
+class DatasetColumn:
+    """Numeric column name and component layout in G2 datasets."""
+
+    role: str
+    key: str
+    names: tuple[str, ...]
+    units: tuple[str, ...]
+    dtype: str = "float32"
+    frame: str | None = None
+
+
+TORSO_FIELDS = (
+    "idx01_body_joint1", "idx02_body_joint2", "idx03_body_joint3",
+    "idx04_body_joint4", "idx05_body_joint5",
+)
+HEAD_FIELDS = ("idx11_head_joint1", "idx12_head_joint2", "idx13_head_joint3")
+ARM_BASE_FIELDS = ("arm_base_x", "arm_base_y", "arm_base_z", *(f"arm_base_rot6d_{i}" for i in range(6)))
+
+
+@dataclass(frozen=True, slots=True)
 class G2LerobotContract:
     """Column names + vector layouts + camera keys for one G2 LeRobot export."""
 
     schema_id: str = "g2_lerobot_keys_v3"
     rotation: str = "rot6d"
+    pose_frame: str = FRAME
+    ee_frame: str = EE_FRAME
 
     columns: DiskColumnKeys = DiskColumnKeys()
     joint: VectorLayout = VectorLayout(
@@ -130,6 +156,34 @@ class G2LerobotContract:
     )
     cameras: CameraKeys = CameraKeys()
 
+    def numeric_columns(self) -> tuple[DatasetColumn, ...]:
+        cols = self.columns
+        joint_units = JOINT_SIDE_UNITS * len(self.joint.sides)
+        pose_units = POSE_SIDE_UNITS * len(self.pose.sides)
+        torso_units = ("rad",) * len(TORSO_FIELDS)
+        head_units = ("rad",) * len(HEAD_FIELDS)
+        return (
+            DatasetColumn("state_joint", cols.state_joint, self.joint.names, joint_units),
+            DatasetColumn("action_pose", cols.action_pose, self.pose.names, pose_units, frame=self.pose_frame),
+            DatasetColumn("action_joint", cols.action_joint, self.joint.names, joint_units),
+            DatasetColumn("state_pose", cols.state_pose, self.pose.names, pose_units, frame=self.pose_frame),
+            DatasetColumn("state_torso", cols.state_torso, TORSO_FIELDS, torso_units),
+            DatasetColumn("action_torso", cols.action_torso, TORSO_FIELDS, torso_units),
+            DatasetColumn("state_head", cols.state_head, HEAD_FIELDS, head_units),
+            DatasetColumn("action_head", cols.action_head, HEAD_FIELDS, head_units),
+            DatasetColumn("state_arm_base", cols.state_arm_base, ARM_BASE_FIELDS, POSE_SIDE_UNITS[:-1], frame=self.pose_frame),
+        )
+
+
+def recorded_video_keys(
+    features: Mapping[str, Any] | None, preferred: Sequence[str],
+) -> tuple[str, ...]:
+    """Read actual video features, keeping the preferred camera order when present."""
+    if features is None:
+        return tuple(preferred)
+    video = tuple(key for key, spec in features.items() if isinstance(spec, Mapping) and spec.get("dtype") == "video")
+    return tuple(key for key in dict.fromkeys((*preferred, *video)) if key in video)
+
 
 G2 = G2LerobotContract()
 
@@ -138,22 +192,15 @@ __all__ = [
     "SIDES",
     "CameraKeys",
     "DiskColumnKeys",
+    "DatasetColumn",
     "G2LerobotContract",
     "VectorLayout",
     "validate_dataset_contract",
+    "recorded_video_keys",
 ]
 
 
-# state.arm_base: pose of arm_base_link in base_link, xyz + rot6d (no gripper).
-_ARM_BASE_DIM = POSE_ARM_DIM - 1
-_COLUMN_WIDTHS = {
-    "state.arm_base": _ARM_BASE_DIM,
-    "state.pose": POSE_DIM,
-    "action.pose": POSE_DIM,
-    "state.joint": JOINT_DIM,
-    "action.joint": JOINT_DIM,
-}
-
+_COLUMN_WIDTHS = {column.key: len(column.names) for column in G2.numeric_columns()}
 
 def action_label_column(policy: PolicySemantics) -> str:
     """Disk column that holds the training action labels."""
@@ -174,7 +221,7 @@ def validate_dataset_contract(
     required |= {f"state.{kind}" for kind in KINDS if uses_kind(policy, kind)}
     required |= {f"action.{kind}" for kind in command_reference_kinds(policy)}
     if uses_arm_base(policy):
-        required.add("state.arm_base")
+        required.add(G2.columns.state_arm_base)
     missing = required - features.keys()
     if missing:
         raise ValueError(f"G2 dataset is missing required columns: {sorted(missing)}")
@@ -186,18 +233,18 @@ def validate_dataset_contract(
         if type(fps) not in (int, float) or not math.isfinite(fps) or fps <= 0:
             raise ValueError("Dataset fps must be a positive finite number")
     exported = dataset_metadata.get("wholebody_export", {})
-    for field, expected in (("ee_frame", "flange"), ("rotation", "rot6d")):
+    for field, expected in (("ee_frame", G2.ee_frame), ("rotation", G2.rotation)):
         if field in exported and exported[field] != expected:
             raise ValueError(f"Dataset wholebody_export.{field}={exported[field]!r} must match {expected!r}")
-    pose_frame = exported.get("pose_frame", "base_link")
+    pose_frame = exported.get("pose_frame", G2.pose_frame)
     action_parent = exported.get("action_parent_frame", pose_frame)
-    if uses_kind(policy, "pose") and pose_frame != "base_link":
-        raise ValueError(f"Dataset wholebody_export.pose_frame={pose_frame!r} must be 'base_link'")
+    if uses_kind(policy, "pose") and pose_frame != G2.pose_frame:
+        raise ValueError(f"Dataset wholebody_export.pose_frame={pose_frame!r} must be {G2.pose_frame!r}")
     reads_command_pose = "pose" in command_reference_kinds(policy) or (
         action["pose"]["enabled"] and action["pose"]["source"] == "action"
     )
-    if reads_command_pose and action_parent != "base_link":
-        raise ValueError(f"Dataset wholebody_export.action_parent_frame={action_parent!r} must be 'base_link'")
+    if reads_command_pose and action_parent != G2.pose_frame:
+        raise ValueError(f"Dataset wholebody_export.action_parent_frame={action_parent!r} must be {G2.pose_frame!r}")
     if label_branch["source"] == "action" and exported.get("action_supervision", "command") != "command":
         raise ValueError("Dataset wholebody_export.action_supervision must match action labels")
     if exported.get("segment_policy") == "concatenated":
