@@ -143,8 +143,8 @@ server 设 `rtc_supported=True` 后，client 可以在 obs 中附加三个字段
 | obs 字段 | 含义 |
 |---|---|
 | `rtc_enabled` | 本次请求是否使用 RTC |
-| `prev_chunk_left_over` | 上一段动作中尚未执行的部分，形状 `(步数, action_spec.dim)` |
-| `inference_delay` | 预计推理期间会执行掉的步数，须小于 `action_horizon`，且不超过上一项的步数 |
+| `prev_chunk_left_over` | 旧轨迹在本次新动作目标时刻的绝对目标，形状 `(步数, action_spec.dim)`；第 i 行对应观测后 `first_target_offset_s + i * action_dt` |
+| `inference_delay` | 上述目标行中预计在响应到达前已走过的步数，须小于 `action_horizon`，且不超过前缀行数；首目标仍在未来时可以为 0 |
 
 如何利用这些信息约束新动作，属于模型算法（例如 OpenPI 的引导采样），不在协议范围内。
 
