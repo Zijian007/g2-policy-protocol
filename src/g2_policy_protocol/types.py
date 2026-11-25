@@ -247,8 +247,10 @@ class ObservationRequest(_ObservationIdentity, _ObservationValues, _WireImages):
 
     The fields below always exist after parsing. Defaults are empty prompt and
     context, RTC disabled, zero delay and no leftover chunk. An enabled RTC
-    prefix contains absolute actions in the negotiated action layout; delay
-    counts action steps, not seconds. observation_time_ns uses the client's
+    prefix contains absolute actions aligned row-by-row with the new target
+    times (first_target_offset_s + i * action_dt). Delay counts those target
+    rows expected to elapse before arrival, not raw observation-age steps or
+    seconds. observation_time_ns uses the client's
     monotonic clock and names the newest sample; server clocks are independent.
     """
 

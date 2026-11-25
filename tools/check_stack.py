@@ -17,9 +17,10 @@ from types import SimpleNamespace
 
 async def serve_worker(args):
     import numpy as np
+    from websockets.asyncio.server import serve
+
     from g2_policy_protocol.contracts.policy import resolve_policy
     from g2_policy_protocol.processing.encoding import ActionCodec
-    from websockets.asyncio.server import serve
 
     root = args.stack_root / args.backend
     sys.path.insert(0, str(root / "src"))
@@ -46,8 +47,9 @@ async def serve_worker(args):
         return codec.encode(actions, obs)
 
     if args.backend == "lerobot-finetune":
-        from g2_policy_protocol.runtime.server import PolicyServer
         from lerobot_finetune.deploy.g2_server import G2Backend, metadata_for
+
+        from g2_policy_protocol.runtime.server import PolicyServer
 
         runtime = SimpleNamespace(
             adapter={"policy": settings, "arm": "right", "cameras": ["head_color"]},
@@ -99,13 +101,16 @@ async def serve_worker(args):
 
 def check_stack(args):
     import numpy as np
+
     from g2_policy_protocol.runtime.images import encode_jpeg
 
     sys.path.insert(0, str(args.stack_root))
-    from wholebody.external_services.policy.runtime.execution import execution_plan
+    from wholebody.external_services.policy.runtime import execution
     from wholebody.external_services.policy.runtime.transport import (
         G2WebSocketPolicyClient,
     )
+
+    resolve_execution_steps = getattr(execution, "resolve_execution_steps", None)
 
     manifest = {}
     for name in ("wholebody", "lerobot-finetune", "openpi", "g2-policy-protocol"):
@@ -166,7 +171,10 @@ def check_stack(args):
                 with G2WebSocketPolicyClient(port=port, encoding=encoding) as client:
                     metadata = client.metadata
                     assert metadata["extensions"]["response_mode"] == "full_chunk"
-                    assert execution_plan(metadata, fallback_horizon=4, execution_steps=2) == (2, 4)
+                    if resolve_execution_steps is None:
+                        assert execution.execution_plan(metadata, fallback_horizon=4, execution_steps=2) == (2, 4)
+                    else:
+                        assert resolve_execution_steps(metadata, fallback_horizon=4, execution_steps=2) == 2
                     pose = np.tile([0, 0, 0, 1, 0, 0, 0, 1, 0, 0.5], 2).astype(np.float32)
                     joint = np.zeros(16, np.float32)
                     image = np.full((8, 8, 3), 128, np.uint8)
