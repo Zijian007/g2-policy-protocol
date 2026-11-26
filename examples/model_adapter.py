@@ -1,6 +1,7 @@
 """Use the shared ActionCodec to turn model outputs into canonical robot actions."""
 
 import numpy as np
+
 from g2_policy_protocol import protocol
 from g2_policy_protocol.contracts.policy import resolve_policy
 from g2_policy_protocol.processing.encoding import ActionCodec

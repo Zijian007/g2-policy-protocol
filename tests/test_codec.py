@@ -2,6 +2,7 @@
 import msgpack
 import numpy as np
 import pytest
+
 from g2_policy_protocol import protocol
 from g2_policy_protocol.runtime import codec
 

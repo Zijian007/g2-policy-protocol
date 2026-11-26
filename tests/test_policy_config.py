@@ -4,11 +4,12 @@ import copy
 
 import numpy as np
 import pytest
+from scipy.spatial.transform import Rotation
+
 from g2_policy_protocol.capabilities import policy_capabilities
 from g2_policy_protocol.contracts.policy import resolve_policy
 from g2_policy_protocol.processing.encoding import ActionCodec, encode_state
 from g2_policy_protocol.processing.geometry import matrix_to_pose
-from scipy.spatial.transform import Rotation
 
 
 def transform(position, angles):

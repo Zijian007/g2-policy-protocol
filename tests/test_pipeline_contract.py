@@ -2,9 +2,10 @@ import copy
 
 import numpy as np
 import pytest
+
 from g2_policy_protocol import protocol
-from g2_policy_protocol.contracts.dataset import validate_dataset_contract
 from g2_policy_protocol.capabilities import policy_capabilities
+from g2_policy_protocol.contracts.dataset import validate_dataset_contract
 from g2_policy_protocol.contracts.policy import resolve_policy
 
 

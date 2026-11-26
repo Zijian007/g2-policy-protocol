@@ -5,6 +5,8 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
+from scipy.spatial.transform import Rotation
+
 from g2_policy_protocol.contracts.policy import resolve_policy
 from g2_policy_protocol.processing.encoding import (
     ActionCodec,
@@ -17,7 +19,6 @@ from g2_policy_protocol.processing.geometry import (
     rotation_to_matrix,
 )
 from g2_policy_protocol.processing.temporal_dataset import TemporalDataset
-from scipy.spatial.transform import Rotation
 
 
 class Rows:

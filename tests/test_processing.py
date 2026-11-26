@@ -1,5 +1,6 @@
 import numpy as np
 import pytest
+
 from g2_policy_protocol.contracts.policy import resolve_policy
 from g2_policy_protocol.processing.encoding import encode_state, state_width
 from g2_policy_protocol.processing.statistics import RunningStatistics

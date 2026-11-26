@@ -6,6 +6,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+
 from g2_policy_protocol import protocol as p
 from g2_policy_protocol.diagnostics import (
     check_action_semantics,
@@ -176,6 +177,7 @@ def test_model_adapter_example_uses_shared_conventions():
 @pytest.mark.parametrize("outcome", ["success", "inference_error", "invalid_request"])
 def test_policy_instance_request_response(encoding, outcome):
     from conftest import FakeConnection
+
     from g2_policy_protocol.runtime.server import PolicyServer
 
     example = runpy.run_path(str(Path(__file__).resolve().parents[1] / "examples/minimal_server.py"))
@@ -232,8 +234,9 @@ def test_policy_instance_request_response(encoding, outcome):
 @pytest.mark.parametrize("encoding", ["msgpack", "json"])
 @pytest.mark.parametrize("image_encoding", ["raw", "jpeg"])
 def test_minimal_client_and_server_exchange_over_websocket(encoding, image_encoding):
-    from g2_policy_protocol.runtime.server import PolicyServer
     from websockets.asyncio.server import serve
+
+    from g2_policy_protocol.runtime.server import PolicyServer
 
     examples = Path(__file__).resolve().parents[1] / "examples"
     backend = runpy.run_path(str(examples / "minimal_server.py"))["MockPolicy"]

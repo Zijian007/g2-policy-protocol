@@ -6,6 +6,7 @@ import sys
 
 import numpy as np
 import pytest
+
 from g2_policy_protocol import protocol as p
 from g2_policy_protocol.runtime import codec
 
