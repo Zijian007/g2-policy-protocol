@@ -14,23 +14,23 @@ python3 -m venv ~/.venvs/robot-dev
 source ~/.venvs/robot-dev/bin/activate
 ```
 
-## 普通安装
+## G2 工作区
+
+[统一安装器](../../g2_wzj_docs/ops/setup/environment.md#3-安装与更新)将协议包可编辑安装到 `AGI_PYTHON`。
+域控侧的 Wholebody 使用这份环境。
+
+## 独立项目
+
+从本仓库根目录执行。用目标项目的 Python 环境，开发时带 `[dev]`，运行时只需 `-e .`。
 
 ```bash
-python -m pip install .
-python -c "import g2_policy_protocol; print(g2_policy_protocol.__file__)"
+python -m pip install -e '.[dev]'
+python -I -c 'import g2_policy_protocol; print(g2_policy_protocol.__file__)'
+python -m pytest -q
 ```
 
-## 源码开发
-
-```bash
-python -m pip install -e . pytest
-```
-
-本包的 pytest 声明在开发 dependency group 中，没有 `[dev]` extra，因此上面显式安装 pytest。
-可编辑安装直接读取 Python 源码，修改或 `git pull` 后重启调用进程即可。
-依赖或包元数据变化时重新安装。普通安装和 wheel 安装需要重新安装才能更新源码副本。
-开发测试按变更范围执行 `python -m pytest`，无需 GPU、模型或机器人。
+可编辑安装的导入路径应落在本仓库的 `src/`。修改 Python 源码后重启调用进程，
+依赖或包元数据变化时重新安装。不需要 GPU、模型或机器人。
 
 ## wheel 构建与安装
 
@@ -48,76 +48,18 @@ python -m pip install /path/to/wheels/g2_policy_protocol-*.whl
 `python -m pip install --force-reinstall --no-deps /path/to/wheels/g2_policy_protocol-*.whl`。
 线上兼容性由协议契约控制，见 [兼容性如何保证](#兼容性如何保证)。
 
-## 指定环境与卸载
+## 指定解释器
 
-未激活环境时，用 `/path/to/env/bin/python -m pip ...` 指定目标解释器。
-uv 管理且未提供 pip 的环境，可用 `uv pip install --python /path/to/env/bin/python .`
-或 `uv pip install --python /path/to/env/bin/python -e . pytest`；uv 不是独立安装本包的前提。
+可使用 `/path/to/env/bin/python -m pip` 指定独立环境。由 uv 管理的环境可用
+`uv pip install --python /path/to/env/bin/python -e '.[dev]'`。
 
-```bash
-python -m pip uninstall g2-policy-protocol
-```
+## 接入应用
 
-卸载只移除当前环境中的包或可编辑链接，不删除仓库和本地构建产物。
+- Wholebody 使用工作区统一安装后的协议源码。推理入口与传输配置见 [Wholebody 协议说明](../../wholebody/docs/dev/policy-protocol.md)。
+- OpenPI 和 LeRobot 由各自的 bootstrap 把相邻的 `../g2-policy-protocol` 可编辑安装到各自环境。
+  离线部署也可以向 bootstrap 传入 `G2_PROTOCOL_WHEELS`。 [OpenPI 环境](../../openpi/scripts/g2/docs/environment.md) · [LeRobot 安装](../../lerobot-finetune/README.md#安装)
 
-## 接入现有应用
-
-现有模型 bootstrap 使用相邻 checkout，通常以可编辑方式安装：
-
-```text
-~/g2-policy-protocol/
-~/wholebody/  或  ~/openpi/ ~/lerobot-finetune/
-```
-
-相邻目录是这些应用脚本的约定，不是协议包本身的安装限制。
-
-| 机器 | 目标环境 | 应用接入方式 |
-|---|---|---|
-| 域控（G2 真机） | wholebody 启动脚本实际使用的环境 | 安装普通包、可编辑源码或 wheel |
-| GPU 服务器 | openpi / lerobot-finetune 的环境 | 各自 bootstrap 默认安装相邻协议源码 |
-
-### 域控侧
-
-只装协议包，不要装 OpenPI、Torch 或 JAX：
-
-```bash
-git clone git@github.com:Zijian007/g2-policy-protocol.git
-/path/to/env/bin/python -m pip install -e ./g2-policy-protocol
-```
-
-首次在应用仓库的父目录 clone；已有 checkout 时直接更新源码。
-解释器路径换成 wholebody launcher 实际使用的那个。
-推理入口为 wholebody 的 `launcher/real/start_{openpi,lerobot}_pi05_infer.sh`，连接地址和编码在推理 YAML 中配置，见 [wholebody policy 通信契约](../../wholebody/docs/dev/policy-protocol.md)。
-
-### GPU 服务器侧
-
-GPU 驱动、Git LFS、FFmpeg 等见模型仓库文档。协议包由 bootstrap 从相邻的 `../g2-policy-protocol` 以 editable 方式安装：
-
-```bash
-# 在 OpenPI 根目录执行
-bash scripts/g2/bootstrap.sh
-# 或在 LeRobot 根目录执行
-bash scripts/bootstrap.sh
-```
-
-完整环境说明：[OpenPI](../../openpi/scripts/g2/docs/environment.md) · [LeRobot](../../lerobot-finetune/README.md)。
-
-### 验证应用环境
-
-用实际启动服务或客户端的解释器确认导入位置：
-
-```bash
-/path/to/env/bin/python -c "import g2_policy_protocol as g; print(g.__file__)"
-```
-
-可编辑安装应指向 checkout 的 `src/`；普通安装或 wheel 安装应指向目标环境的 `site-packages`。
-
-使用 wheel 接入模型 bootstrap 时，将协议 wheel 目录传给应用脚本：
-
-```bash
-G2_PROTOCOL_WHEELS=/path/to/wheels bash scripts/g2/bootstrap.sh  # OpenPI 根目录
-G2_PROTOCOL_WHEELS=/path/to/wheels bash scripts/bootstrap.sh     # LeRobot 根目录
-```
+用实际启动服务或应用的解释器执行上面的导入检查，确认它读取的是预期 checkout 或 wheel。
 
 ## 兼容性如何保证
 

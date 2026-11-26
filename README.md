@@ -105,20 +105,15 @@ class Backend:
 
 ## 安装与验证
 
-要求 Python 3.10+。源码开发：
-
-```bash
-python -m pip install -e . pytest
-python -m pytest -q
-```
+要求 Python 3.10+。工作区安装、独立开发和导入验证见[安装指南](docs/install.md)。
 
 跨仓库联调在四个仓库的共同父目录执行：
 
 ```bash
 python g2-policy-protocol/tools/check_stack.py \
-  --stack-root /home/zijianwang \
-  --lerobot-python /home/zijianwang/.venvs/g2-policy-test/bin/python \
-  --openpi-python /home/zijianwang/openpi/.venv/bin/python
+  --stack-root "$PWD" \
+  --lerobot-python "$PWD/lerobot-finetune/.venv/bin/python" \
+  --openpi-python "$PWD/openpi/.venv/bin/python"
 ```
 
 命令覆盖两个 backend、pose/joint、history 1/2、raw/JPEG 和 JSON/MessagePack。它只验证协议和适配流程，不代表模型质量或真机安全。
